@@ -92,7 +92,7 @@ banking-app/
   - `001_init.sql`
 - `go.mod`
 - `go.sum`
-- `README.md` (this file)
+- `README.md`
 
 ## Development notes
 - Prefer the storage abstraction defined in `internal/storage/storage.go` so you can swap backends for tests or runtime.

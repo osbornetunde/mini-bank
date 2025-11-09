@@ -1,25 +1,58 @@
 package core
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 type Account struct {
-	ID      string
-	UserID  string
+	ID      int
+	Name    string
 	Balance float64
 }
 
-func (a *Account) Deposit(amount float64) error {
+var accounts = make(map[int]*Account)
+var nextID = 1
+
+func Deposit(id int, amount float64) error {
+	acc, exists := accounts[id]
+	if !exists {
+		return fmt.Errorf("account %d not found", id)
+	}
 	if amount <= 0 {
 		return errors.New("invalid deposit amount")
 	}
-	a.Balance += amount
+	acc.Balance += amount
 	return nil
 }
 
-func (a *Account) Withdraw(amount float64) error {
-	if amount > a.Balance {
+func Withdraw(id int, amount float64) error {
+	acc, exists := accounts[id]
+	if !exists {
+		return fmt.Errorf("account %d not found", id)
+	}
+	if amount > acc.Balance {
 		return errors.New("insufficient funds")
 	}
-	a.Balance -= amount
+	acc.Balance -= amount
 	return nil
+}
+
+func CreateAccount(name string, intialBalance float64) *Account {
+	acc := &Account{
+		ID:      nextID,
+		Name:    name,
+		Balance: intialBalance,
+	}
+
+	accounts[nextID] = acc
+	nextID++
+	return acc
+}
+
+func GetAllAccounts() {
+	fmt.Println("ID\tName\tBalance")
+	for _, acc := range accounts {
+		fmt.Printf("%d\t%s\t%.2f\n", acc.ID, acc.Name, acc.Balance)
+	}
 }
