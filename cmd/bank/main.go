@@ -3,45 +3,23 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 
-	"mini-bank/internal/core"
-	"mini-bank/internal/storage/memory"
+	"mini-bank/internal/storage/file"
 )
 
 func main() {
 	ctx := context.Background()
-	store := memory.NewStore()
 
-	// Create sample accounts
-	acc1, _ := store.CreateAccount(ctx, "Alice", 1000)
-	acc2, _ := store.CreateAccount(ctx, "Bob", 500)
-
-	fmt.Println("✅ Accounts created:")
-	fmt.Printf(" - %s (Balance: %.2f)\n", acc1.Name, acc1.Balance)
-	fmt.Printf(" - %s (Balance: %.2f)\n\n", acc2.Name, acc2.Balance)
-
-	// Update balance
-	_ = store.UpdateBalance(ctx, acc1.ID, 1200)
-
-	// List accounts
-	accounts, _ := store.ListAccounts(ctx)
-	fmt.Println("💰 All accounts:")
-	for _, a := range accounts {
-		fmt.Printf("[%d] %s — %.2f\n", a.ID, a.Name, a.Balance)
+	store, err := file.NewFileStore("data/accounts.json", "data/transactions.json")
+	if err != nil {
+		log.Fatalf("failed to initialize file store: %v", err)
 	}
 
-	// Record a transaction
-	tx := &core.Transaction{
-		AccountID: acc1.ID,
-		Type:      "deposit",
-		Amount:    200,
+	acc, err := store.CreateAccount(ctx, "Charlie", 1000)
+	if err != nil {
+		log.Fatalf("failed to create account: %v", err)
 	}
-	_ = store.RecordTransaction(ctx, tx)
 
-	// List transactions
-	fmt.Println("\n📜 Transactions for Alice:")
-	txs, _ := store.ListTransactions(ctx, acc1.ID)
-	for _, t := range txs {
-		fmt.Printf("- %s of %.2f\n", t.Type, t.Amount)
-	}
+	fmt.Printf("Created account: %+v\n", acc)
 }
