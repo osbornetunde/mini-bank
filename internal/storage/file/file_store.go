@@ -87,8 +87,6 @@ func (s *FileStore) loadTransactions() error {
 
 // saveAccounts writes accounts to JSON file.
 func (s *FileStore) saveAccounts() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	accountsSlice := make([]*core.Account, 0, len(s.accounts))
 	for _, acc := range s.accounts {
@@ -104,8 +102,6 @@ func (s *FileStore) saveAccounts() error {
 
 // saveTransactions writes transactions to JSON file.
 func (s *FileStore) saveTransactions() error {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	data, err := json.MarshalIndent(s.transactions, "", "  ")
 	if err != nil {
