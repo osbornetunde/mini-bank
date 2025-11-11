@@ -114,10 +114,14 @@ func (s *Store) RecordTransaction(ctx context.Context, tx *core.Transaction) err
 
 // ListTransactions lists all transactions for an account.
 func (s *Store) ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var list []*core.Transaction
 	for _, t := range s.transactions {
 		if t.AccountID == accountID {
-			list = append(list, t)
+			c := *t
+			list = append(list, &c)
 		}
 	}
 	return list, nil
