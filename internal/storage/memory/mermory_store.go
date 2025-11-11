@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"mini-bank/internal/core"
 )
@@ -101,6 +102,12 @@ func (s *Store) UpdateBalance(ctx context.Context, id int, newBalance float64) e
 
 // RecordTransaction stores a transaction in memory.
 func (s *Store) RecordTransaction(ctx context.Context, tx *core.Transaction) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if tx.Timestamp.IsZero() {
+		tx.Timestamp = time.Now().UTC()
+	}
 	s.transactions = append(s.transactions, tx)
 	return nil
 }
