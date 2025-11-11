@@ -83,10 +83,18 @@ func (s *Store) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 
 // UpdateBalance modifies an account's balance.
 func (s *Store) UpdateBalance(ctx context.Context, id int, newBalance float64) error {
+	s.mu.RLock()
 	acc, ok := s.accounts[id]
+	s.mu.RUnlock()
+
 	if !ok {
 		return fmt.Errorf("account not found")
 	}
+
+	al := s.getAccountLock(id)
+	al.Lock()
+	defer al.Unlock()
+
 	acc.Balance = newBalance
 	return nil
 }
