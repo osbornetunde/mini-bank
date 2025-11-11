@@ -10,6 +10,7 @@ import (
 
 // Store provides in-memory persistence for accounts and transactions.
 type Store struct {
+	mu           sync.RWMutex
 	accounts     map[int]*core.Account
 	transactions []*core.Transaction
 	nextID       int
@@ -39,9 +40,18 @@ func (s *Store) getAccountLock(id int) *sync.Mutex {
 
 // CreateAccount adds a new account to memory.
 func (s *Store) CreateAccount(ctx context.Context, name string, initialBalance float64) (*core.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	s.nextID++
 	acc := &core.Account{ID: s.nextID, Name: name, Balance: initialBalance}
 	s.accounts[acc.ID] = acc
+
+	s.locksMu.Lock()
+	if _, ok := s.acctLocks[acc.ID]; !ok {
+		s.acctLocks[acc.ID] = &sync.Mutex{}
+	}
+	s.locksMu.Unlock()
 	return acc, nil
 }
 
