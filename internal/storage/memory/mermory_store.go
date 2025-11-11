@@ -126,3 +126,67 @@ func (s *Store) ListTransactions(ctx context.Context, accountID int) ([]*core.Tr
 	}
 	return list, nil
 }
+
+func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) error {
+	if fromID == toID {
+		return fmt.Errorf("cannot transfer to same account")
+	}
+
+	// determine lock order to avoid deadlock: lower ID first
+	first, second := fromID, toID
+	if first > second {
+		first, second = second, first
+	}
+
+	// lock the two accounts' mutexes in order
+	firstLock := s.getAccountLock(first)
+	secondLock := s.getAccountLock(second)
+
+	firstLock.Lock()
+	defer firstLock.Unlock()
+	secondLock.Lock()
+	defer secondLock.Unlock()
+
+	// Use a read lock to safely get the account pointers
+	s.mu.RLock()
+	fromAcc, ok1 := s.accounts[fromID]
+	toAcc, ok2 := s.accounts[toID]
+	s.mu.RUnlock()
+
+	if !ok1 || !ok2 {
+		return fmt.Errorf("account not found")
+	}
+
+	if fromAcc.Balance < amount {
+		return fmt.Errorf("insufficient funds")
+	}
+
+	fromAcc.Balance -= amount
+	toAcc.Balance += amount
+
+	// Use a full lock only for the short duration of appending to the transactions slice
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	tx := &core.Transaction{
+		AccountID:     fromID,
+		Type:          "transfer",
+		Amount:        amount,
+		Timestamp:     time.Now().UTC(),
+		FromAccountID: fromID,
+		ToAccountID:   toID,
+	}
+	s.transactions = append(s.transactions, tx)
+
+	tx2 := &core.Transaction{
+		AccountID:     toID,
+		Type:          "deposit",
+		Amount:        amount,
+		Timestamp:     time.Now().UTC(),
+		FromAccountID: fromID,
+		ToAccountID:   toID,
+	}
+	s.transactions = append(s.transactions, tx2)
+
+	return nil
+}
