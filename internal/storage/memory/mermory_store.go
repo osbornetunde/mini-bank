@@ -83,7 +83,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 }
 
 // UpdateBalance modifies an account's balance.
-func (s *Store) UpdateBalance(ctx context.Context, id int, newBalance float64) error {
+func (s *Store) UpdateBalance(ctx context.Context, id int, delta float64) error {
 	s.mu.RLock()
 	acc, ok := s.accounts[id]
 	s.mu.RUnlock()
@@ -96,7 +96,7 @@ func (s *Store) UpdateBalance(ctx context.Context, id int, newBalance float64) e
 	al.Lock()
 	defer al.Unlock()
 
-	acc.Balance = newBalance
+	acc.Balance += delta
 	return nil
 }
 
@@ -138,7 +138,7 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		first, second = second, first
 	}
 
-	// lock the two accounts' mutexes in order
+	// Step 1: Lock accounts and perform all checks and preparations.
 	firstLock := s.getAccountLock(first)
 	secondLock := s.getAccountLock(second)
 
@@ -147,7 +147,6 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 	secondLock.Lock()
 	defer secondLock.Unlock()
 
-	// Use a read lock to safely get the account pointers
 	s.mu.RLock()
 	fromAcc, ok1 := s.accounts[fromID]
 	toAcc, ok2 := s.accounts[toID]
@@ -161,14 +160,12 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		return fmt.Errorf("insufficient funds")
 	}
 
-	fromAcc.Balance -= amount
-	toAcc.Balance += amount
+	// Step 2: Prepare changes in temporary variables.
+	// The "live" data is not touched yet.
+	newFromBalance := fromAcc.Balance - amount
+	newToBalance := toAcc.Balance + amount
 
-	// Use a full lock only for the short duration of appending to the transactions slice
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	tx := &core.Transaction{
+	tx1 := &core.Transaction{
 		AccountID:     fromID,
 		Type:          "transfer",
 		Amount:        amount,
@@ -176,8 +173,6 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		FromAccountID: fromID,
 		ToAccountID:   toID,
 	}
-	s.transactions = append(s.transactions, tx)
-
 	tx2 := &core.Transaction{
 		AccountID:     toID,
 		Type:          "deposit",
@@ -186,7 +181,14 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		FromAccountID: fromID,
 		ToAccountID:   toID,
 	}
-	s.transactions = append(s.transactions, tx2)
+
+	// Step 3: Commit all changes in a single atomic block.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	fromAcc.Balance = newFromBalance
+	toAcc.Balance = newToBalance
+	s.transactions = append(s.transactions, tx1, tx2)
 
 	return nil
 }
