@@ -70,9 +70,13 @@ func (s *Store) GetAccount(ctx context.Context, id int) (*core.Account, error) {
 
 // ListAccounts returns all accounts in memory.
 func (s *Store) ListAccounts(ctx context.Context) ([]*core.Account, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	var list []*core.Account
 	for _, acc := range s.accounts {
-		list = append(list, acc)
+		copyAcc := *acc
+		list = append(list, &copyAcc)
 	}
 	return list, nil
 }
