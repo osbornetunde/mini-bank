@@ -57,11 +57,15 @@ func (s *Store) CreateAccount(ctx context.Context, name string, initialBalance f
 
 // GetAccount retrieves an account by ID.
 func (s *Store) GetAccount(ctx context.Context, id int) (*core.Account, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	acc, ok := s.accounts[id]
 	if !ok {
 		return nil, fmt.Errorf("account not found")
 	}
-	return acc, nil
+	copyAcc := *acc
+	return &copyAcc, nil
 }
 
 // ListAccounts returns all accounts in memory.
