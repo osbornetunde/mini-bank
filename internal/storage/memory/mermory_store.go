@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"mini-bank/internal/core"
 )
@@ -12,13 +13,28 @@ type Store struct {
 	accounts     map[int]*core.Account
 	transactions []*core.Transaction
 	nextID       int
+
+	locksMu   sync.Mutex
+	acctLocks map[int]*sync.Mutex
 }
 
 // NewStore creates a new in-memory data store.
 func NewStore() *Store {
 	return &Store{
-		accounts: make(map[int]*core.Account),
+		accounts:  make(map[int]*core.Account),
+		acctLocks: make(map[int]*sync.Mutex),
 	}
+}
+
+func (s *Store) getAccountLock(id int) *sync.Mutex {
+	s.locksMu.Lock()
+	l, ok := s.acctLocks[id]
+	if !ok {
+		l = &sync.Mutex{}
+		s.acctLocks[id] = l
+	}
+	s.locksMu.Unlock()
+	return l
 }
 
 // CreateAccount adds a new account to memory.
