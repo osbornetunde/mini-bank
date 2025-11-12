@@ -34,6 +34,10 @@ type getAccountResponse struct {
 	Balance float64 `json:"balance"`
 }
 
+type getAccountsResponse struct {
+	Accounts []*getAccountResponse `json:"accounts"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req createAccountRequest
@@ -104,6 +108,33 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 		ID:      acc.ID,
 		Name:    acc.Name,
 		Balance: acc.Balance,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	accounts, err := a.store.ListAccounts(ctx)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "failed to get accounts")
+		return
+	}
+	
+	var accountsResponse []*getAccountResponse
+	
+	for _, acc := range accounts {
+		accountsResponse = append(accountsResponse, &getAccountResponse{
+			ID:      acc.ID,
+			Name:    acc.Name,
+			Balance: acc.Balance,
+		})
+	}
+
+	resp := getAccountsResponse{
+		Accounts: accountsResponse,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

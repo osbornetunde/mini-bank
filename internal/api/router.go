@@ -9,11 +9,14 @@ func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/accounts", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
+		switch r.Method {
+		case http.MethodGet:
+			a.GetAccountsHandler(w, r)
+		case http.MethodPost:
 			a.CreateAccountHandler(w, r)
-			return
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	})
 
 	mux.HandleFunc("/accounts/", func(w http.ResponseWriter, r *http.Request) {
