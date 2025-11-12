@@ -5,6 +5,8 @@ import (
 	"errors"
 	"mini-bank/internal/storage"
 	"net/http"
+	"path"
+	"strconv"
 )
 
 type API struct {
@@ -21,6 +23,12 @@ type createAccountRequest struct {
 }
 
 type createAccountResponse struct {
+	ID      int     `json:"id"`
+	Name    string  `json:"name"`
+	Balance float64 `json:"balance"`
+}
+
+type getAccountResponse struct {
 	ID      int     `json:"id"`
 	Name    string  `json:"name"`
 	Balance float64 `json:"balance"`
@@ -74,4 +82,31 @@ func httpError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
+
+	idStr := path.Base(r.URL.Path)
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		httpError(w, http.StatusBadRequest, "invalid account id")
+		return
+	}
+
+	ctx := r.Context()
+	acc, err := a.store.GetAccount(ctx, id)
+	if err != nil {
+		httpError(w, http.StatusNotFound, "account not found")
+		return
+	}
+
+	resp := getAccountResponse{
+		ID:      acc.ID,
+		Name:    acc.Name,
+		Balance: acc.Balance,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
 }
