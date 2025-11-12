@@ -2,52 +2,52 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"sync"
+	"net/http"
+	"os"
+	"os/signal"
+	"time"
 
-	"mini-bank/internal/storage/memory"
+	"mini-bank/internal/api"
+	mem "mini-bank/internal/storage/memory"
 )
 
 func main() {
-	ctx := context.Background()
-	store := memory.NewStore()
+	// choose storage backend
+	store := mem.NewStore() // in-memory for now
 
-	acc1, _ := store.CreateAccount(ctx, "Alice", 1000.0)
-	acc2, _ := store.CreateAccount(ctx, "Bob", 5000.0)
+	// create API and router
+	a := api.NewAPI(store)
+	handler := a.Router()
 
-	fmt.Printf("Initial: Alice=%.2f, Bob=%.2f\n", acc1.Balance, acc2.Balance)
-
-	const n = 1000
-	var wg sync.WaitGroup
-
-	// start n concurrent deposits of +1.0
-	wg.Add(n)
-	for range n {
-		go func() {
-			defer wg.Done()
-			if err := store.Transfer(ctx, acc1.ID, acc2.ID, 1.0); err != nil {
-				log.Println("transfer error:", err)
-			}
-		}()
+	// http server
+	srv := &http.Server{
+		Addr:         ":8080",
+		Handler:      handler,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 
-	// concurrent transfers from Bob to Alice of 0.5
-	wg.Add(n)
-	for range n {
-		go func() {
-			defer wg.Done()
-			if err := store.Transfer(ctx, acc2.ID, acc1.ID, 0.5); err != nil {
-				log.Println("transfer error:", err)
-			}
-		}()
+	// run server in goroutine
+	go func() {
+		log.Printf("listening on %s", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %v", err)
+		}
+	}()
+
+	// graceful shutdown on SIGINT/SIGTERM
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt)
+	<-quit
+	log.Println("shutting down server...")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Fatalf("server shutdown failed: %v", err)
 	}
 
-	wg.Wait()
-
-	a1, _ := store.GetAccount(ctx, acc1.ID)
-	a2, _ := store.GetAccount(ctx, acc2.ID)
-	fmt.Printf("Final: Alice=%.2f, Bob=%.2f\n", a1.Balance, a2.Balance)
-
-	fmt.Printf("Expected: Alice=%.2f, Bob=%.2f\n", 500.00, 5500.00)
+	log.Println("server stopped")
 }
