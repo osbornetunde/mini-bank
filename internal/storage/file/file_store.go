@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"mini-bank/internal/core"
+	"mini-bank/internal/storage"
 	"os"
 	"sync"
+	"time"
 )
 
 type FileStore struct {
@@ -184,4 +186,66 @@ func (s *FileStore) ListTransactions(ctx context.Context, accountID int) ([]*cor
 		}
 	}
 	return result, nil
+}
+
+// Transfer performs a money transfer between two accounts.
+func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if fromID == toID {
+		return nil, nil, fmt.Errorf("cannot transfer to same account")
+	}
+
+	fromAcc, ok1 := s.accounts[fromID]
+	toAcc, ok2 := s.accounts[toID]
+
+	if !ok1 || !ok2 {
+		return nil, nil, storage.ErrAccountNotFound
+	}
+
+	if fromAcc.Balance < amount {
+		return nil, nil, storage.ErrInsufficientFunds
+	}
+
+	fromAcc.Balance -= amount
+	toAcc.Balance += amount
+
+	// Record transactions
+	tx1 := &core.Transaction{
+		AccountID:     fromID,
+		Type:          "transfer",
+		Amount:        amount,
+		Timestamp:     time.Now().UTC(),
+		FromAccountID: fromID,
+		ToAccountID:   toID,
+	}
+	tx2 := &core.Transaction{
+		AccountID:     toID,
+		Type:          "deposit",
+		Amount:        amount,
+		Timestamp:     time.Now().UTC(),
+		FromAccountID: fromID,
+		ToAccountID:   toID,
+	}
+	s.transactions = append(s.transactions, tx1, tx2)
+
+	// Persist changes
+	if err := s.saveAccounts(); err != nil {
+		// Attempt to rollback in-memory change, then return error.
+		fromAcc.Balance += amount
+		toAcc.Balance -= amount
+		return nil, nil, err
+	}
+
+	if err := s.saveTransactions(); err != nil {
+		// This is harder to roll back as accounts are already saved.
+		// For this simple store, we accept the inconsistency.
+		return nil, nil, err
+	}
+
+	fromCopy := *fromAcc
+	toCopy := *toAcc
+
+	return &fromCopy, &toCopy, nil
 }

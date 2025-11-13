@@ -3,10 +3,10 @@ package memory
 import (
 	"context"
 	"fmt"
+	"mini-bank/internal/core"
+	"mini-bank/internal/storage"
 	"sync"
 	"time"
-
-	"mini-bank/internal/core"
 )
 
 // Store provides in-memory persistence for accounts and transactions.
@@ -127,9 +127,9 @@ func (s *Store) ListTransactions(ctx context.Context, accountID int) ([]*core.Tr
 	return list, nil
 }
 
-func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) error {
+func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error) {
 	if fromID == toID {
-		return fmt.Errorf("cannot transfer to same account")
+		return nil, nil, fmt.Errorf("cannot transfer to same account")
 	}
 
 	// determine lock order to avoid deadlock: lower ID first
@@ -153,15 +153,14 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 	s.mu.RUnlock()
 
 	if !ok1 || !ok2 {
-		return fmt.Errorf("account not found")
+		return nil, nil, storage.ErrAccountNotFound
 	}
 
 	if fromAcc.Balance < amount {
-		return fmt.Errorf("insufficient funds")
+		return nil, nil, storage.ErrInsufficientFunds
 	}
 
 	// Step 2: Prepare changes in temporary variables.
-	// The "live" data is not touched yet.
 	newFromBalance := fromAcc.Balance - amount
 	newToBalance := toAcc.Balance + amount
 
@@ -190,5 +189,8 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 	toAcc.Balance = newToBalance
 	s.transactions = append(s.transactions, tx1, tx2)
 
-	return nil
+	fromCopy := *fromAcc
+	toCopy := *toAcc
+
+	return &fromCopy, &toCopy, nil
 }

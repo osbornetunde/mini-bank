@@ -2,7 +2,13 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"mini-bank/internal/core"
+)
+
+var (
+	ErrAccountNotFound   = errors.New("account not found")
+	ErrInsufficientFunds = errors.New("insufficient funds")
 )
 
 // Storage defines how accounts and transactions are persisted.
@@ -15,5 +21,5 @@ type Storage interface {
 	RecordTransaction(ctx context.Context, tx *core.Transaction) error
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
 
-	Transfer(ctx context.Context, fromID, toID int, amount float64) error
+	Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error)
 }

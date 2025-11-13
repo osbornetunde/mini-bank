@@ -44,6 +44,11 @@ type getAccountsResponse struct {
 	Accounts []*getAccountResponse `json:"accounts"`
 }
 
+type transferResponse struct {
+	FromAccount *getAccountResponse `json:"from_account"`
+	ToAccount   *getAccountResponse `json:"to_account"`
+}
+
 type transferRequest struct {
 	FromID int     `json:"from_id"`
 	ToID   int     `json:"to_id"`
@@ -92,7 +97,7 @@ func validateCreateAccount(req createAccountRequest) error {
 	return nil
 }
 
-func validateDepositRequest(req transferRequest) error {
+func validateTransferRequest(req transferRequest) error {
 	if req.Amount <= 0 {
 		return errors.New("amount must be greater than zero")
 	}
@@ -166,19 +171,36 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateDepositRequest(req); err != nil {
+	if err := validateTransferRequest(req); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	senderID := req.FromID
-	receiverID := req.ToID
-	amount := req.Amount
-	err := a.store.Transfer(ctx, senderID, receiverID, amount)
+	fromAcc, toAcc, err := a.store.Transfer(ctx, req.FromID, req.ToID, req.Amount)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, "transfer failed")
+		switch {
+		case errors.Is(err, storage.ErrAccountNotFound):
+			httpError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, storage.ErrInsufficientFunds):
+			httpError(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			httpError(w, http.StatusInternalServerError, "transfer failed")
+		}
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]string{"message": "transfer successful"})
+	resp := transferResponse{
+		FromAccount: &getAccountResponse{
+			ID:      fromAcc.ID,
+			Name:    fromAcc.Name,
+			Balance: fromAcc.Balance,
+		},
+		ToAccount: &getAccountResponse{
+			ID:      toAcc.ID,
+			Name:    toAcc.Name,
+			Balance: toAcc.Balance,
+		},
+	}
+
+	jsonResponse(w, http.StatusOK, resp)
 }
