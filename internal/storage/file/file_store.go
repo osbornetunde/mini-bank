@@ -250,8 +250,8 @@ func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float
 	return &fromCopy, &toCopy, nil
 }
 
-// Deposit adds a given amount to an account.
-func (s *FileStore) Deposit(ctx context.Context, accountID int, amount float64) (*core.Account, error) {
+// Payment performs a deposit or withdrawal on an account.
+func (s *FileStore) Payment(ctx context.Context, accountID int, amount float64, paymentType storage.PaymentType) (*core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -260,22 +260,36 @@ func (s *FileStore) Deposit(ctx context.Context, accountID int, amount float64) 
 		return nil, storage.ErrAccountNotFound
 	}
 
-	account.Balance += amount
+	if paymentType == storage.Withdraw && account.Balance < amount {
+		return nil, storage.ErrInsufficientFunds
+	}
+
+	originalBalance := account.Balance
+	switch paymentType {
+	case storage.Deposit:
+		account.Balance += amount
+	case storage.Withdraw:
+		account.Balance -= amount
+	default:
+		return nil, fmt.Errorf("unknown payment type: %s", paymentType)
+	}
 
 	transaction := &core.Transaction{
 		AccountID: accountID,
-		Type:      "deposit",
+		Type:      string(paymentType),
 		Amount:    amount,
 		Timestamp: time.Now().UTC(),
 	}
 	s.transactions = append(s.transactions, transaction)
 
 	if err := s.saveAccounts(); err != nil {
-		account.Balance -= amount // Rollback in-memory change
+		account.Balance = originalBalance // Rollback in-memory change
 		return nil, err
 	}
 
 	if err := s.saveTransactions(); err != nil {
+		// NOTE: This is harder to roll back as accounts are already saved.
+		// For this simple store, we accept the potential inconsistency.
 		return nil, err
 	}
 

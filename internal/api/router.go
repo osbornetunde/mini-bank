@@ -49,12 +49,12 @@ func (a *API) Router() http.Handler {
 		a.TransferHandler(w, r)
 	})
 
-	mux.HandleFunc("/transactions/deposit", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/transactions/payment", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		a.DepositHandler(w, r)
+		a.PaymentHandler(w, r)
 	})
 
 	return mux

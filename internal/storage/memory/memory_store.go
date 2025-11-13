@@ -195,7 +195,7 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 	return &fromCopy, &toCopy, nil
 }
 
-func (s *Store) Deposit(ctx context.Context, accountID int, amount float64) (*core.Account, error) {
+func (s *Store) Payment(ctx context.Context, accountID int, amount float64, paymentType storage.PaymentType) (*core.Account, error) {
 
 	s.mu.RLock()
 	account, ok := s.accounts[accountID]
@@ -209,10 +209,20 @@ func (s *Store) Deposit(ctx context.Context, accountID int, amount float64) (*co
 	accountLock.Lock()
 	defer accountLock.Unlock()
 
-	newBalance := account.Balance + amount
+	if account.Balance < amount && paymentType == storage.Withdraw {
+		return nil, storage.ErrInsufficientFunds
+	}
+
+	var newBalance float64
+	switch paymentType {
+	case storage.Deposit:
+		newBalance = account.Balance + amount
+	case storage.Withdraw:
+		newBalance = account.Balance - amount
+	}
 	transaction := &core.Transaction{
 		AccountID: accountID,
-		Type:      "deposit",
+		Type:      string(paymentType),
 		Amount:    amount,
 		Timestamp: time.Now().UTC(),
 	}

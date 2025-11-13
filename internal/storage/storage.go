@@ -11,6 +11,13 @@ var (
 	ErrInsufficientFunds = errors.New("insufficient funds")
 )
 
+type PaymentType string
+
+const (
+	Deposit  PaymentType = "deposit"
+	Withdraw PaymentType = "withdraw"
+)
+
 // Storage defines how accounts and transactions are persisted.
 type Storage interface {
 	CreateAccount(ctx context.Context, name string, initialBalance float64) (*core.Account, error)
@@ -22,5 +29,5 @@ type Storage interface {
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
 
 	Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error)
-	Deposit(ctx context.Context, accountID int, amount float64) (*core.Account, error)
+	Payment(ctx context.Context, accountID int, amount float64, paymentType PaymentType) (*core.Account, error)
 }

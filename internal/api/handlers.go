@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"mini-bank/internal/storage"
 	"net/http"
 	"path"
@@ -55,9 +56,10 @@ type transferRequest struct {
 	Amount float64 `json:"amount"`
 }
 
-type depositRequest struct {
-	AccountID int     `json:"account_id"`
-	Amount    float64 `json:"amount"`
+type paymentRequest struct {
+	AccountID int                 `json:"account_id"`
+	Amount    float64             `json:"amount"`
+	Type      storage.PaymentType `json:"type"`
 }
 
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +120,7 @@ func validateTransferRequest(req transferRequest) error {
 	return nil
 }
 
-func validateDepositRequest(req depositRequest) error {
+func validatePaymentRequest(req paymentRequest) error {
 	if req.Amount <= 0 {
 		return errors.New("amount must be greater than zero")
 	}
@@ -220,33 +222,36 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, resp)
 }
 
-func (a *API) DepositHandler(w http.ResponseWriter, r *http.Request) {
+func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	var req depositRequest
+	var req paymentRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
-	if err := validateDepositRequest(req); err != nil {
+	if err := validatePaymentRequest(req); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	depositResp, err := a.store.Deposit(ctx, req.AccountID, req.Amount)
+	paymentResp, err := a.store.Payment(ctx, req.AccountID, req.Amount, req.Type)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
 			httpError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, storage.ErrInsufficientFunds):
+			httpError(w, http.StatusUnprocessableEntity, err.Error())
 		default:
-			httpError(w, http.StatusInternalServerError, "deposit failed")
+			errorMessage := fmt.Sprintf("%s failed", req.Type)
+			httpError(w, http.StatusInternalServerError, errorMessage)
 		}
 		return
 	}
 
 	resp := getAccountResponse{
-		ID:      depositResp.ID,
-		Name:    depositResp.Name,
-		Balance: depositResp.Balance,
+		ID:      paymentResp.ID,
+		Name:    paymentResp.Name,
+		Balance: paymentResp.Balance,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
