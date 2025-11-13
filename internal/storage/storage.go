@@ -22,4 +22,5 @@ type Storage interface {
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
 
 	Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error)
+	Deposit(ctx context.Context, accountID int, amount float64) (*core.Account, error)
 }

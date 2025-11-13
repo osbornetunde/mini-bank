@@ -249,3 +249,36 @@ func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float
 
 	return &fromCopy, &toCopy, nil
 }
+
+// Deposit adds a given amount to an account.
+func (s *FileStore) Deposit(ctx context.Context, accountID int, amount float64) (*core.Account, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	account, ok := s.accounts[accountID]
+	if !ok {
+		return nil, storage.ErrAccountNotFound
+	}
+
+	account.Balance += amount
+
+	transaction := &core.Transaction{
+		AccountID: accountID,
+		Type:      "deposit",
+		Amount:    amount,
+		Timestamp: time.Now().UTC(),
+	}
+	s.transactions = append(s.transactions, transaction)
+
+	if err := s.saveAccounts(); err != nil {
+		account.Balance -= amount // Rollback in-memory change
+		return nil, err
+	}
+
+	if err := s.saveTransactions(); err != nil {
+		return nil, err
+	}
+
+	accountCopy := *account
+	return &accountCopy, nil
+}

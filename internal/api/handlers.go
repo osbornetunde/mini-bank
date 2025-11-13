@@ -55,6 +55,11 @@ type transferRequest struct {
 	Amount float64 `json:"amount"`
 }
 
+type depositRequest struct {
+	AccountID int     `json:"account_id"`
+	Amount    float64 `json:"amount"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 	var req createAccountRequest
@@ -109,6 +114,16 @@ func validateTransferRequest(req transferRequest) error {
 	}
 	if req.ToID <= 0 {
 		return errors.New("invalid receiver account id")
+	}
+	return nil
+}
+
+func validateDepositRequest(req depositRequest) error {
+	if req.Amount <= 0 {
+		return errors.New("amount must be greater than zero")
+	}
+	if req.AccountID <= 0 {
+		return errors.New("account ID must be greater than zero")
 	}
 	return nil
 }
@@ -200,6 +215,38 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 			Name:    toAcc.Name,
 			Balance: toAcc.Balance,
 		},
+	}
+
+	jsonResponse(w, http.StatusOK, resp)
+}
+
+func (a *API) DepositHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req depositRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "Invalid JSON body")
+		return
+	}
+	if err := validateDepositRequest(req); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	depositResp, err := a.store.Deposit(ctx, req.AccountID, req.Amount)
+	if err != nil {
+		switch {
+		case errors.Is(err, storage.ErrAccountNotFound):
+			httpError(w, http.StatusNotFound, err.Error())
+		default:
+			httpError(w, http.StatusInternalServerError, "deposit failed")
+		}
+		return
+	}
+
+	resp := getAccountResponse{
+		ID:      depositResp.ID,
+		Name:    depositResp.Name,
+		Balance: depositResp.Balance,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)

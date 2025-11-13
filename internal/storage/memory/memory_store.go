@@ -194,3 +194,35 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 
 	return &fromCopy, &toCopy, nil
 }
+
+func (s *Store) Deposit(ctx context.Context, accountID int, amount float64) (*core.Account, error) {
+
+	s.mu.RLock()
+	account, ok := s.accounts[accountID]
+	s.mu.RUnlock()
+	if !ok {
+		return nil, storage.ErrAccountNotFound
+	}
+
+	accountLock := s.getAccountLock(accountID)
+
+	accountLock.Lock()
+	defer accountLock.Unlock()
+
+	newBalance := account.Balance + amount
+	transaction := &core.Transaction{
+		AccountID: accountID,
+		Type:      "deposit",
+		Amount:    amount,
+		Timestamp: time.Now().UTC(),
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	account.Balance = newBalance
+	s.transactions = append(s.transactions, transaction)
+
+	accountCopy := *account
+	return &accountCopy, nil
+}
