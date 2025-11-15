@@ -105,6 +105,16 @@ If you want to contribute:
 - Keep changes small and focused; write tests for new logic.
 - Follow idiomatic Go practices and format code with `gofmt`.
 
+## Future Work / TODO
+- [ ] Add tests for Account and transaction methods
+- [ ] Add API handler test with httptest
+- [ ] Add storage test for (in-memory & DB)
+- [ ] Add concurrency-safe scheduled interest calculation
+- [ ] Add WebSocket updates for account changes
+- [ ] Dockerize the application
+- [ ] Implement Authentication
+- [ ] Add authentication middleware
+
 ## License
 This project does not include a license file in the tree above. If you plan to publish or share the repository, add a `LICENSE` file and choose an appropriate license.
 
