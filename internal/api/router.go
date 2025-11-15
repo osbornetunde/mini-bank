@@ -14,6 +14,7 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST /api/v1/transactions/transfer", a.TransferHandler)
 	mux.HandleFunc("POST /api/v1/transactions/payment", a.PaymentHandler)
 	mux.HandleFunc("GET /api/v1/accounts/{id}/transactions", a.GetTransactionsHandler)
+	mux.HandleFunc("GET /api/v1/transactions/{ref}", a.GetTransactionHandler)
 
 	return mux
 }

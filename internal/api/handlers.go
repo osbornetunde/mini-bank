@@ -300,8 +300,32 @@ func (a *API) GetTransactionsHandler(w http.ResponseWriter, r *http.Request) {
 
 	response, err := a.store.ListTransactions(ctx, accountID)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, err.Error())
+		a.logger.Error("failed to list transactions", "err", err)
+		httpError(w, http.StatusInternalServerError, "could not retrieve transactions")
 		return
 	}
 	jsonResponse(w, http.StatusOK, response)
+}
+
+func (a *API) GetTransactionHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	idStr := r.PathValue("ref")
+
+	if idStr == "" {
+		httpError(w, http.StatusBadRequest, "Invalid transaction reference")
+		return
+	}
+	resp, err := a.store.GetTransaction(ctx, idStr)
+	if err != nil {
+		if errors.Is(err, storage.ErrTransactionNotFound) {
+			httpError(w, http.StatusNotFound, "transaction not found")
+			return
+		}
+
+		a.logger.Error("failed to get transaction", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to retrieve transaction")
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, resp)
 }

@@ -8,8 +8,9 @@ import (
 )
 
 var (
-	ErrAccountNotFound   = errors.New("account not found")
-	ErrInsufficientFunds = errors.New("insufficient funds")
+	ErrAccountNotFound     = errors.New("account not found")
+	ErrInsufficientFunds   = errors.New("insufficient funds")
+	ErrTransactionNotFound = errors.New("transaction not found")
 )
 
 type PaymentType string
@@ -28,6 +29,7 @@ type Storage interface {
 
 	RecordTransaction(ctx context.Context, tx *core.Transaction) error
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
+	GetTransaction(ctx context.Context, ref string) (*core.Transaction, error)
 
 	Transfer(ctx context.Context, fromID, toID int, amount float64, reference string) (*core.Account, *core.Account, error)
 	Payment(ctx context.Context, accountID int, amount float64, paymentType PaymentType, reference string) (*core.Account, error)

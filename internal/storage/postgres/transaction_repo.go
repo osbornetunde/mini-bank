@@ -38,8 +38,13 @@ func scanAccount(row scanner) (*core.Account, error) {
 	return &a, nil
 }
 
-// We'll implement the methods used by the API: GetAccount, Deposit, Withdraw, ListAccounts, RecordTransaction, ListTransactions.
-// Omitted: Transfer - should be implemented similarly using a db transaction for multi-account updates.
+func scanTransaction(row scanner) (*core.Transaction, error) {
+	var t core.Transaction
+	if err := row.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &t.Reference, &t.FromAccountID, &t.ToAccountID, &t.Timestamp); err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
 
 type scanner interface {
 	Scan(dest ...any) error
@@ -50,10 +55,13 @@ func (r *Repo) GetAccount(ctx context.Context, id int) (*core.Account, error) {
 	const q = `SELECT id, name, balance, created_at FROM accounts WHERE id = $1`
 	row := r.db.QueryRowContext(ctx, q, id)
 	acc, err := scanAccount(row)
-	if err == sql.ErrNoRows {
-		return nil, storage.ErrAccountNotFound
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrAccountNotFound
+		}
+		return nil, err
 	}
-	return acc, err
+	return acc, nil
 }
 
 // ListAccounts returns all accounts
@@ -242,13 +250,13 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount float64, r
 
 	// Record transaction for sender
 	const insFrom = `INSERT INTO transactions (account_id, type, amount, to_account_id, reference, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5)`
-		if _, err := tx.ExecContext(ctx, insFrom, fromID, amount, toID, nullIfEmpty(reference), time.Now().UTC()); err != nil {
+	if _, err := tx.ExecContext(ctx, insFrom, fromID, amount, toID, nullIfEmpty(reference), time.Now().UTC()); err != nil {
 		return nil, nil, err
 	}
 
 	// Record transaction for receiver
 	const insTo = `INSERT INTO transactions (account_id, type, amount, from_account_id, reference, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5)`
-		if _, err := tx.ExecContext(ctx, insTo, toID, amount, fromID, nullIfEmpty(reference), time.Now().UTC()); err != nil {
+	if _, err := tx.ExecContext(ctx, insTo, toID, amount, fromID, nullIfEmpty(reference), time.Now().UTC()); err != nil {
 		return nil, nil, err
 	}
 
@@ -269,6 +277,21 @@ func (r *Repo) Payment(ctx context.Context, accountID int, amount float64, payme
 	default:
 		return nil, fmt.Errorf("unknown payment type: %s", paymentType)
 	}
+}
+
+func (r *Repo) GetTransaction(ctx context.Context, ref string) (*core.Transaction, error) {
+	const q = `SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at FROM transactions WHERE reference = $1`
+
+	row := r.db.QueryRowContext(ctx, q, ref)
+	trx, err := scanTransaction(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrTransactionNotFound
+		}
+		return nil, err
+	}
+
+	return trx, nil
 }
 
 // Helpers
