@@ -45,7 +45,7 @@ func main() {
 	}
 
 	repo := pg.NewRepo(db)
-	a := api.NewAPI(repo)
+	a := api.NewAPI(repo, logger)
 	handler := a.Router()
 
 	// http server

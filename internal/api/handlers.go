@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"path"
 	"strconv"
@@ -15,11 +16,12 @@ import (
 )
 
 type API struct {
-	store storage.Storage
+	store  storage.Storage
+	logger *slog.Logger
 }
 
-func NewAPI(s storage.Storage) *API {
-	return &API{store: s}
+func NewAPI(s storage.Storage, logger *slog.Logger) *API {
+	return &API{store: s, logger: logger}
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -84,6 +86,7 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	acc, err := a.store.CreateAccount(ctx, req.Name, req.InitialBalance)
 	if err != nil {
+		a.logger.Error("failed to create account", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to create account")
 
 		return
@@ -154,7 +157,12 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	acc, err := a.store.GetAccount(ctx, id)
 	if err != nil {
-		httpError(w, http.StatusNotFound, "account not found")
+		if errors.Is(err, storage.ErrAccountNotFound) {
+			httpError(w, http.StatusNotFound, "account not found")
+			return
+		}
+		a.logger.Error("failed to get account", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to get account")
 		return
 	}
 
@@ -172,6 +180,7 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	accounts, err := a.store.ListAccounts(ctx)
 	if err != nil {
+		a.logger.Error("failed to get accounts", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to get accounts")
 		return
 	}
@@ -217,6 +226,7 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, storage.ErrInsufficientFunds):
 			httpError(w, http.StatusUnprocessableEntity, err.Error())
 		default:
+			a.logger.Error("transfer failed", "err", err)
 			httpError(w, http.StatusInternalServerError, "transfer failed")
 		}
 		return
@@ -263,6 +273,7 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, storage.ErrInsufficientFunds):
 			httpError(w, http.StatusUnprocessableEntity, err.Error())
 		default:
+			a.logger.Error("payment failed", "type", req.Type, "err", err)
 			errorMessage := fmt.Sprintf("%s failed", req.Type)
 			httpError(w, http.StatusInternalServerError, errorMessage)
 		}
