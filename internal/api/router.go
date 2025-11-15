@@ -1,61 +1,19 @@
 package api
 
-import (
-	"net/http"
-	"strings"
-)
+import "net/http"
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/accounts", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodGet:
-			a.GetAccountsHandler(w, r)
-		case http.MethodPost:
-			a.CreateAccountHandler(w, r)
-		default:
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		}
-	})
+	// Account routes
+	mux.HandleFunc("POST /api/v1/accounts", a.CreateAccountHandler)
+	mux.HandleFunc("GET /api/v1/accounts", a.GetAccountsHandler)
+	mux.HandleFunc("GET /api/v1/accounts/{id}", a.GetAccountHandler)
 
-	mux.HandleFunc("/accounts/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		idStr := strings.TrimPrefix(r.URL.Path, "/accounts/")
-		idStr = strings.TrimSuffix(idStr, "/")
-
-		if idStr == "" {
-			http.Error(w, "account id required", http.StatusBadRequest)
-			return
-		}
-
-		if strings.Contains(idStr, "/") {
-			http.NotFound(w, r)
-			return
-		}
-
-		a.GetAccountHandler(w, r)
-	})
-
-	mux.HandleFunc("/transactions/transfer", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		a.TransferHandler(w, r)
-	})
-
-	mux.HandleFunc("/transactions/payment", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		a.PaymentHandler(w, r)
-	})
+	// Transaction routes
+	mux.HandleFunc("POST /api/v1/transactions/transfer", a.TransferHandler)
+	mux.HandleFunc("POST /api/v1/transactions/payment", a.PaymentHandler)
+	mux.HandleFunc("GET /api/v1/accounts/{id}/transactions", a.GetTransactionsHandler)
 
 	return mux
 }

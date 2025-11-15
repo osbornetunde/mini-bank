@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"path"
 	"strconv"
 	"time"
 
@@ -147,7 +146,7 @@ func httpError(w http.ResponseWriter, status int, message string) {
 }
 
 func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
-	idStr := path.Base(r.URL.Path)
+	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id <= 0 {
 		httpError(w, http.StatusBadRequest, "invalid account id")
@@ -164,12 +163,13 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 		a.logger.Error("failed to get account", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to get account")
 		return
+
 	}
 
 	resp := getAccountResponse{
-		ID:        acc.ID,
-		Name:      acc.Name,
-		Balance:   acc.Balance,
+		ID: acc.ID,
+		Name: acc.Name,
+		Balance: acc.Balance,
 		CreatedAt: acc.CreatedAt,
 	}
 
@@ -189,9 +189,9 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, acc := range accounts {
 		accountsResponse = append(accountsResponse, &getAccountResponse{
-			ID:        acc.ID,
-			Name:      acc.Name,
-			Balance:   acc.Balance,
+			ID: acc.ID,
+			Name: acc.Name,
+			Balance: acc.Balance,
 			CreatedAt: acc.CreatedAt,
 		})
 	}
@@ -234,15 +234,15 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := transferResponse{
 		FromAccount: &getAccountResponse{
-			ID:        fromAcc.ID,
-			Name:      fromAcc.Name,
-			Balance:   fromAcc.Balance,
+			ID: fromAcc.ID,
+			Name: fromAcc.Name,
+			Balance: fromAcc.Balance,
 			CreatedAt: fromAcc.CreatedAt,
 		},
 		ToAccount: &getAccountResponse{
-			ID:        toAcc.ID,
-			Name:      toAcc.Name,
-			Balance:   toAcc.Balance,
+			ID: toAcc.ID,
+			Name: toAcc.Name,
+			Balance: toAcc.Balance,
 			CreatedAt: toAcc.CreatedAt,
 		},
 		Reference: reference,
@@ -281,11 +281,27 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := getAccountResponse{
-		ID:        paymentResp.ID,
-		Name:      paymentResp.Name,
-		Balance:   paymentResp.Balance,
+		ID: paymentResp.ID,
+		Name: paymentResp.Name,
+		Balance: paymentResp.Balance,
 		CreatedAt: paymentResp.CreatedAt,
 	}
-
 	jsonResponse(w, http.StatusOK, resp)
+}
+
+func (a *API) GetTransactionsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	idStr := r.PathValue("id")
+	accountID, err := strconv.Atoi(idStr)
+	if err != nil || accountID <= 0 {
+		httpError(w, http.StatusBadRequest, "Invalid account ID")
+		return
+	}
+
+	response, err := a.store.ListTransactions(ctx, accountID)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	jsonResponse(w, http.StatusOK, response)
 }
