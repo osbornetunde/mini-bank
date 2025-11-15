@@ -48,6 +48,9 @@ func main() {
 	a := api.NewAPI(repo, logger)
 	handler := a.Router()
 
+	// Timeout middleware for all routes
+	handler = a.TimeoutMiddleware(handler, 15*time.Second)
+
 	// http server
 	srv := &http.Server{
 		Addr:         cfg.Port,
