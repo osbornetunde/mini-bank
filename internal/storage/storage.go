@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+
 	"mini-bank/internal/core"
 )
 
@@ -28,6 +29,6 @@ type Storage interface {
 	RecordTransaction(ctx context.Context, tx *core.Transaction) error
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
 
-	Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error)
-	Payment(ctx context.Context, accountID int, amount float64, paymentType PaymentType) (*core.Account, error)
+	Transfer(ctx context.Context, fromID, toID int, amount float64, reference string) (*core.Account, *core.Account, error)
+	Payment(ctx context.Context, accountID int, amount float64, paymentType PaymentType, reference string) (*core.Account, error)
 }

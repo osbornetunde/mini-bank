@@ -2,27 +2,55 @@ package main
 
 import (
 	"context"
-	"log"
+	"errors"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 
 	"mini-bank/internal/api"
-	mem "mini-bank/internal/storage/memory"
+	pg "mini-bank/internal/storage/postgres"
 )
 
-func main() {
-	// choose storage backend
-	store := mem.NewStore() // in-memory for now
+// config holds the application configuration.
+type config struct {
+	Port   string
+	DB_DSN string
+}
 
-	// create API and router
-	a := api.NewAPI(store)
+func main() {
+	// Setup structured logger
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+
+	// Load configuration
+	cfg := config{
+		Port:   ":8080", // Default port
+		DB_DSN: os.Getenv("DATABASE_URL"),
+	}
+	if portEnv := os.Getenv("PORT"); portEnv != "" {
+		cfg.Port = ":" + portEnv
+	}
+
+	if cfg.DB_DSN == "" {
+		logger.Error("DATABASE_URL environment variable is not set")
+		os.Exit(1)
+	}
+
+	db, err := pg.NewDB(cfg.DB_DSN)
+	if err != nil {
+		logger.Error("failed to connect to db", "err", err)
+		os.Exit(1)
+	}
+
+	repo := pg.NewRepo(db)
+	a := api.NewAPI(repo)
 	handler := a.Router()
 
 	// http server
 	srv := &http.Server{
-		Addr:         ":8080",
+		Addr:         cfg.Port,
 		Handler:      handler,
 		ReadTimeout:  5 * time.Second,
 		WriteTimeout: 10 * time.Second,
@@ -31,23 +59,30 @@ func main() {
 
 	// run server in goroutine
 	go func() {
-		log.Printf("listening on %s", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("listen: %v", err)
+		logger.Info("listening on", "addr", srv.Addr)
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("server listen failed", "err", err)
+			os.Exit(1) // Exit if the server fails to start
 		}
 	}()
 
 	// graceful shutdown on SIGINT/SIGTERM
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
-	log.Println("shutting down server...")
+	logger.Info("shutting down server...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		log.Fatalf("server shutdown failed: %v", err)
+		logger.Error("server shutdown failed", "err", err)
+		os.Exit(1)
 	}
 
-	log.Println("server stopped")
+	// Close the database connection.
+	if err := db.Close(); err != nil {
+		logger.Error("database shutdown failed", "err", err)
+	}
+
+	logger.Info("server stopped gracefully")
 }

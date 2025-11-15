@@ -169,16 +169,16 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		Type:          "transfer",
 		Amount:        amount,
 		Timestamp:     time.Now().UTC(),
-		FromAccountID: fromID,
-		ToAccountID:   toID,
+		FromAccountID: &fromID,
+		ToAccountID:   &toID,
 	}
 	tx2 := &core.Transaction{
 		AccountID:     toID,
 		Type:          "deposit",
 		Amount:        amount,
 		Timestamp:     time.Now().UTC(),
-		FromAccountID: fromID,
-		ToAccountID:   toID,
+		FromAccountID: &fromID,
+		ToAccountID:   &toID,
 	}
 
 	// Step 3: Commit all changes in a single atomic block.

@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"mini-bank/internal/storage"
 	"net/http"
 	"path"
 	"strconv"
+	"time"
+
+	"mini-bank/internal/storage"
+
+	"github.com/google/uuid"
 )
 
 type API struct {
@@ -30,15 +34,17 @@ type createAccountRequest struct {
 }
 
 type createAccountResponse struct {
-	ID      int     `json:"id"`
-	Name    string  `json:"name"`
-	Balance float64 `json:"balance"`
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	Balance   float64   `json:"balance"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type getAccountResponse struct {
-	ID      int     `json:"id"`
-	Name    string  `json:"name"`
-	Balance float64 `json:"balance"`
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	Balance   float64   `json:"balance"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 type getAccountsResponse struct {
@@ -48,6 +54,7 @@ type getAccountsResponse struct {
 type transferResponse struct {
 	FromAccount *getAccountResponse `json:"from_account"`
 	ToAccount   *getAccountResponse `json:"to_account"`
+	Reference   string              `json:"reference,omitempty"`
 }
 
 type transferRequest struct {
@@ -63,7 +70,6 @@ type paymentRequest struct {
 }
 
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
-
 	var req createAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid JSON body")
@@ -84,9 +90,10 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := createAccountResponse{
-		ID:      acc.ID,
-		Name:    acc.Name,
-		Balance: acc.Balance,
+		ID:        acc.ID,
+		Name:      acc.Name,
+		Balance:   acc.Balance,
+		CreatedAt: acc.CreatedAt,
 	}
 
 	jsonResponse(w, http.StatusCreated, resp)
@@ -137,7 +144,6 @@ func httpError(w http.ResponseWriter, status int, message string) {
 }
 
 func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
-
 	idStr := path.Base(r.URL.Path)
 	id, err := strconv.Atoi(idStr)
 	if err != nil || id <= 0 {
@@ -152,7 +158,14 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, acc)
+	resp := getAccountResponse{
+		ID:        acc.ID,
+		Name:      acc.Name,
+		Balance:   acc.Balance,
+		CreatedAt: acc.CreatedAt,
+	}
+
+	jsonResponse(w, http.StatusOK, resp)
 }
 
 func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
@@ -167,9 +180,10 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, acc := range accounts {
 		accountsResponse = append(accountsResponse, &getAccountResponse{
-			ID:      acc.ID,
-			Name:    acc.Name,
-			Balance: acc.Balance,
+			ID:        acc.ID,
+			Name:      acc.Name,
+			Balance:   acc.Balance,
+			CreatedAt: acc.CreatedAt,
 		})
 	}
 
@@ -193,7 +207,9 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fromAcc, toAcc, err := a.store.Transfer(ctx, req.FromID, req.ToID, req.Amount)
+	reference := uuid.NewString()
+
+	fromAcc, toAcc, err := a.store.Transfer(ctx, req.FromID, req.ToID, req.Amount, reference)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
@@ -208,15 +224,18 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := transferResponse{
 		FromAccount: &getAccountResponse{
-			ID:      fromAcc.ID,
-			Name:    fromAcc.Name,
-			Balance: fromAcc.Balance,
+			ID:        fromAcc.ID,
+			Name:      fromAcc.Name,
+			Balance:   fromAcc.Balance,
+			CreatedAt: fromAcc.CreatedAt,
 		},
 		ToAccount: &getAccountResponse{
-			ID:      toAcc.ID,
-			Name:    toAcc.Name,
-			Balance: toAcc.Balance,
+			ID:        toAcc.ID,
+			Name:      toAcc.Name,
+			Balance:   toAcc.Balance,
+			CreatedAt: toAcc.CreatedAt,
 		},
+		Reference: reference,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
@@ -234,7 +253,9 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	paymentResp, err := a.store.Payment(ctx, req.AccountID, req.Amount, req.Type)
+	reference := uuid.NewString()
+
+	paymentResp, err := a.store.Payment(ctx, req.AccountID, req.Amount, req.Type, reference)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
@@ -249,9 +270,10 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := getAccountResponse{
-		ID:      paymentResp.ID,
-		Name:    paymentResp.Name,
-		Balance: paymentResp.Balance,
+		ID:        paymentResp.ID,
+		Name:      paymentResp.Name,
+		Balance:   paymentResp.Balance,
+		CreatedAt: paymentResp.CreatedAt,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)

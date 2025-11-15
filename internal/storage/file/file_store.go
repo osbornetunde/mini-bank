@@ -217,16 +217,16 @@ func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float
 		Type:          "transfer",
 		Amount:        amount,
 		Timestamp:     time.Now().UTC(),
-		FromAccountID: fromID,
-		ToAccountID:   toID,
+		FromAccountID: &fromID,
+		ToAccountID:   &toID,
 	}
 	tx2 := &core.Transaction{
 		AccountID:     toID,
 		Type:          "deposit",
 		Amount:        amount,
 		Timestamp:     time.Now().UTC(),
-		FromAccountID: fromID,
-		ToAccountID:   toID,
+		FromAccountID: &fromID,
+		ToAccountID:   &toID,
 	}
 	s.transactions = append(s.transactions, tx1, tx2)
 

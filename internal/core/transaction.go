@@ -9,6 +9,6 @@ type Transaction struct {
 	Amount        float64
 	Timestamp     time.Time
 	Reference     string
-	FromAccountID int
-	ToAccountID   int
+	FromAccountID *int
+	ToAccountID   *int
 }
