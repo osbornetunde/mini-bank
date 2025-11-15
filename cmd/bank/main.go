@@ -47,9 +47,8 @@ func main() {
 	repo := pg.NewRepo(db)
 	a := api.NewAPI(repo, logger)
 	handler := a.Router()
-
-	// Timeout middleware for all routes
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
+	handler = a.LoggingMiddleware(handler)
 
 	// http server
 	srv := &http.Server{

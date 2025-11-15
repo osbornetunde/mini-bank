@@ -167,9 +167,9 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := getAccountResponse{
-		ID: acc.ID,
-		Name: acc.Name,
-		Balance: acc.Balance,
+		ID:        acc.ID,
+		Name:      acc.Name,
+		Balance:   acc.Balance,
 		CreatedAt: acc.CreatedAt,
 	}
 
@@ -189,9 +189,9 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 
 	for _, acc := range accounts {
 		accountsResponse = append(accountsResponse, &getAccountResponse{
-			ID: acc.ID,
-			Name: acc.Name,
-			Balance: acc.Balance,
+			ID:        acc.ID,
+			Name:      acc.Name,
+			Balance:   acc.Balance,
 			CreatedAt: acc.CreatedAt,
 		})
 	}
@@ -234,15 +234,15 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := transferResponse{
 		FromAccount: &getAccountResponse{
-			ID: fromAcc.ID,
-			Name: fromAcc.Name,
-			Balance: fromAcc.Balance,
+			ID:        fromAcc.ID,
+			Name:      fromAcc.Name,
+			Balance:   fromAcc.Balance,
 			CreatedAt: fromAcc.CreatedAt,
 		},
 		ToAccount: &getAccountResponse{
-			ID: toAcc.ID,
-			Name: toAcc.Name,
-			Balance: toAcc.Balance,
+			ID:        toAcc.ID,
+			Name:      toAcc.Name,
+			Balance:   toAcc.Balance,
 			CreatedAt: toAcc.CreatedAt,
 		},
 		Reference: reference,
@@ -281,9 +281,9 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := getAccountResponse{
-		ID: paymentResp.ID,
-		Name: paymentResp.Name,
-		Balance: paymentResp.Balance,
+		ID:        paymentResp.ID,
+		Name:      paymentResp.Name,
+		Balance:   paymentResp.Balance,
 		CreatedAt: paymentResp.CreatedAt,
 	}
 	jsonResponse(w, http.StatusOK, resp)
