@@ -9,18 +9,19 @@ import (
 	"strconv"
 	"time"
 
+	"mini-bank/internal/service"
 	"mini-bank/internal/storage"
 
 	"github.com/google/uuid"
 )
 
 type API struct {
-	store  storage.Storage
-	logger *slog.Logger
+	service service.Service
+	logger  *slog.Logger
 }
 
-func NewAPI(s storage.Storage, logger *slog.Logger) *API {
-	return &API{store: s, logger: logger}
+func NewAPI(s service.Service, logger *slog.Logger) *API {
+	return &API{service: s, logger: logger}
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -83,7 +84,7 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	acc, err := a.store.CreateAccount(ctx, req.Name, req.InitialBalance)
+	acc, err := a.service.CreateAccount(ctx, req.Name, req.InitialBalance)
 	if err != nil {
 		a.logger.Error("failed to create account", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to create account")
@@ -154,7 +155,7 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	acc, err := a.store.GetAccount(ctx, id)
+	acc, err := a.service.GetAccount(ctx, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrAccountNotFound) {
 			httpError(w, http.StatusNotFound, "account not found")
@@ -178,7 +179,7 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	accounts, err := a.store.ListAccounts(ctx)
+	accounts, err := a.service.ListAccounts(ctx)
 	if err != nil {
 		a.logger.Error("failed to get accounts", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to get accounts")
@@ -218,7 +219,7 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	reference := uuid.NewString()
 
-	fromAcc, toAcc, err := a.store.Transfer(ctx, req.FromID, req.ToID, req.Amount, reference)
+	fromAcc, toAcc, err := a.service.Transfer(ctx, req.FromID, req.ToID, req.Amount, reference)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
@@ -265,7 +266,7 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	reference := uuid.NewString()
 
-	paymentResp, err := a.store.Payment(ctx, req.AccountID, req.Amount, req.Type, reference)
+	paymentResp, err := a.service.Payment(ctx, req.AccountID, req.Amount, req.Type, reference)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
@@ -298,7 +299,7 @@ func (a *API) GetTransactionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := a.store.ListTransactions(ctx, accountID)
+	response, err := a.service.ListTransactions(ctx, accountID)
 	if err != nil {
 		a.logger.Error("failed to list transactions", "err", err)
 		httpError(w, http.StatusInternalServerError, "could not retrieve transactions")
@@ -315,7 +316,7 @@ func (a *API) GetTransactionHandler(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "Invalid transaction reference")
 		return
 	}
-	resp, err := a.store.GetTransaction(ctx, idStr)
+	resp, err := a.service.GetTransaction(ctx, idStr)
 	if err != nil {
 		if errors.Is(err, storage.ErrTransactionNotFound) {
 			httpError(w, http.StatusNotFound, "transaction not found")

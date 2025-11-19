@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mini-bank/internal/api"
+	"mini-bank/internal/service"
 	pg "mini-bank/internal/storage/postgres"
 )
 
@@ -45,7 +46,8 @@ func main() {
 	}
 
 	repo := pg.NewRepo(db)
-	a := api.NewAPI(repo, logger)
+	service := service.New(repo)
+	a := api.NewAPI(service, logger)
 	handler := a.Router()
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
 	handler = a.LoggingMiddleware(handler)
