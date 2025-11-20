@@ -23,7 +23,7 @@ func NewRepo(db *DB) *Repo {
 }
 
 // CreateAccount creates a new account
-func (r *Repo) CreateAccount(ctx context.Context, name string, balance float64) (*core.Account, error) {
+func (r *Repo) CreateAccount(ctx context.Context, name string, balance int64) (*core.Account, error) {
 	const q = `INSERT INTO accounts (name, balance) VALUES ($1, $2) RETURNING id, name, balance, created_at`
 	row := r.db.QueryRowContext(ctx, q, name, balance)
 	return scanAccount(row)
@@ -85,7 +85,7 @@ func (r *Repo) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 }
 
 // Deposit performs an atomic deposit and returns the updated account.
-func (r *Repo) Deposit(ctx context.Context, accountID int, amount float64, reference string) (*core.Account, error) {
+func (r *Repo) Deposit(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
 	if amount <= 0 {
 		return nil, errors.New("amount must be positive")
 	}
@@ -119,7 +119,7 @@ func (r *Repo) Deposit(ctx context.Context, accountID int, amount float64, refer
 }
 
 // Withdraw performs an atomic withdrawal and returns the updated account.
-func (r *Repo) Withdraw(ctx context.Context, accountID int, amount float64, reference string) (*core.Account, error) {
+func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
 	if amount <= 0 {
 		return nil, errors.New("amount must be positive")
 	}
@@ -208,14 +208,14 @@ func (r *Repo) ListTransactions(ctx context.Context, accountID int) ([]*core.Tra
 }
 
 // UpdateBalance updates an account's balance.
-func (r *Repo) UpdateBalance(ctx context.Context, id int, newBalance float64) error {
+func (r *Repo) UpdateBalance(ctx context.Context, id int, newBalance int64) error {
 	const q = `UPDATE accounts SET balance = $1 WHERE id = $2`
 	_, err := r.db.ExecContext(ctx, q, newBalance, id)
 	return err
 }
 
 // Transfer performs a transactional transfer between two accounts.
-func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount float64, reference string) (*core.Account, *core.Account, error) {
+func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
 	if amount <= 0 {
 		return nil, nil, errors.New("amount must be positive")
 	}
@@ -268,7 +268,7 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount float64, r
 }
 
 // Payment performs a deposit or withdrawal and returns the updated account.
-func (r *Repo) Payment(ctx context.Context, accountID int, amount float64, paymentType storage.PaymentType, reference string) (*core.Account, error) {
+func (r *Repo) Payment(ctx context.Context, accountID int, amount int64, paymentType storage.PaymentType, reference string) (*core.Account, error) {
 	switch paymentType {
 	case storage.Deposit:
 		return r.Deposit(ctx, accountID, amount, reference)

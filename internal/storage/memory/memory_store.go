@@ -40,7 +40,7 @@ func (s *Store) getAccountLock(id int) *sync.Mutex {
 }
 
 // CreateAccount adds a new account to memory.
-func (s *Store) CreateAccount(ctx context.Context, name string, initialBalance float64) (*core.Account, error) {
+func (s *Store) CreateAccount(ctx context.Context, name string, initialBalance int64) (*core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -83,7 +83,7 @@ func (s *Store) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 }
 
 // UpdateBalance modifies an account's balance.
-func (s *Store) UpdateBalance(ctx context.Context, id int, delta float64) error {
+func (s *Store) UpdateBalance(ctx context.Context, id int, delta int64) error {
 	s.mu.RLock()
 	acc, ok := s.accounts[id]
 	s.mu.RUnlock()
@@ -127,7 +127,20 @@ func (s *Store) ListTransactions(ctx context.Context, accountID int) ([]*core.Tr
 	return list, nil
 }
 
-func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error) {
+func (s *Store) GetTransaction(ctx context.Context, ref string) (*core.Transaction, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, t := range s.transactions {
+		if t.Reference == ref {
+			c := *t
+			return &c, nil
+		}
+	}
+	return nil, storage.ErrTransactionNotFound
+}
+
+func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
 	if fromID == toID {
 		return nil, nil, fmt.Errorf("cannot transfer to same account")
 	}
@@ -171,6 +184,7 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		Timestamp:     time.Now().UTC(),
 		FromAccountID: &fromID,
 		ToAccountID:   &toID,
+		Reference:     reference,
 	}
 	tx2 := &core.Transaction{
 		AccountID:     toID,
@@ -179,6 +193,7 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 		Timestamp:     time.Now().UTC(),
 		FromAccountID: &fromID,
 		ToAccountID:   &toID,
+		Reference:     reference,
 	}
 
 	// Step 3: Commit all changes in a single atomic block.
@@ -195,7 +210,7 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount float64) 
 	return &fromCopy, &toCopy, nil
 }
 
-func (s *Store) Payment(ctx context.Context, accountID int, amount float64, paymentType storage.PaymentType) (*core.Account, error) {
+func (s *Store) Payment(ctx context.Context, accountID int, amount int64, paymentType storage.PaymentType, reference string) (*core.Account, error) {
 
 	s.mu.RLock()
 	account, ok := s.accounts[accountID]
@@ -213,7 +228,7 @@ func (s *Store) Payment(ctx context.Context, accountID int, amount float64, paym
 		return nil, storage.ErrInsufficientFunds
 	}
 
-	var newBalance float64
+	var newBalance int64
 	switch paymentType {
 	case storage.Deposit:
 		newBalance = account.Balance + amount
@@ -225,6 +240,7 @@ func (s *Store) Payment(ctx context.Context, accountID int, amount float64, paym
 		Type:      string(paymentType),
 		Amount:    amount,
 		Timestamp: time.Now().UTC(),
+		Reference: reference,
 	}
 
 	s.mu.Lock()

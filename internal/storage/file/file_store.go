@@ -113,7 +113,7 @@ func (s *FileStore) saveTransactions() error {
 }
 
 // CreateAccount implements Storage interface.
-func (s *FileStore) CreateAccount(ctx context.Context, name string, initialBalance float64) (*core.Account, error) {
+func (s *FileStore) CreateAccount(ctx context.Context, name string, initialBalance int64) (*core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -152,7 +152,7 @@ func (s *FileStore) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 }
 
 // UpdateBalance updates account balance.
-func (s *FileStore) UpdateBalance(ctx context.Context, id int, newBalance float64) error {
+func (s *FileStore) UpdateBalance(ctx context.Context, id int, newBalance int64) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -188,8 +188,20 @@ func (s *FileStore) ListTransactions(ctx context.Context, accountID int) ([]*cor
 	return result, nil
 }
 
+func (s *FileStore) GetTransaction(ctx context.Context, ref string) (*core.Transaction, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, t := range s.transactions {
+		if t.Reference == ref {
+			return t, nil
+		}
+	}
+	return nil, storage.ErrTransactionNotFound
+}
+
 // Transfer performs a money transfer between two accounts.
-func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float64) (*core.Account, *core.Account, error) {
+func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -219,6 +231,7 @@ func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float
 		Timestamp:     time.Now().UTC(),
 		FromAccountID: &fromID,
 		ToAccountID:   &toID,
+		Reference:     reference,
 	}
 	tx2 := &core.Transaction{
 		AccountID:     toID,
@@ -227,6 +240,7 @@ func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float
 		Timestamp:     time.Now().UTC(),
 		FromAccountID: &fromID,
 		ToAccountID:   &toID,
+		Reference:     reference,
 	}
 	s.transactions = append(s.transactions, tx1, tx2)
 
@@ -251,7 +265,7 @@ func (s *FileStore) Transfer(ctx context.Context, fromID, toID int, amount float
 }
 
 // Payment performs a deposit or withdrawal on an account.
-func (s *FileStore) Payment(ctx context.Context, accountID int, amount float64, paymentType storage.PaymentType) (*core.Account, error) {
+func (s *FileStore) Payment(ctx context.Context, accountID int, amount int64, paymentType storage.PaymentType, reference string) (*core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -279,6 +293,7 @@ func (s *FileStore) Payment(ctx context.Context, accountID int, amount float64, 
 		Type:      string(paymentType),
 		Amount:    amount,
 		Timestamp: time.Now().UTC(),
+		Reference: reference,
 	}
 	s.transactions = append(s.transactions, transaction)
 

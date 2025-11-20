@@ -31,21 +31,21 @@ func jsonResponse(w http.ResponseWriter, status int, data any) {
 }
 
 type createAccountRequest struct {
-	Name           string  `json:"name"`
-	InitialBalance float64 `json:"initial_balance"`
+	Name           string `json:"name"`
+	InitialBalance int64  `json:"initial_balance"`
 }
 
 type createAccountResponse struct {
 	ID        int       `json:"id"`
 	Name      string    `json:"name"`
-	Balance   float64   `json:"balance"`
+	Balance   int64     `json:"balance"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 type getAccountResponse struct {
 	ID        int       `json:"id"`
 	Name      string    `json:"name"`
-	Balance   float64   `json:"balance"`
+	Balance   int64     `json:"balance"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -60,14 +60,14 @@ type transferResponse struct {
 }
 
 type transferRequest struct {
-	FromID int     `json:"from_id"`
-	ToID   int     `json:"to_id"`
-	Amount float64 `json:"amount"`
+	FromID int   `json:"from_id"`
+	ToID   int   `json:"to_id"`
+	Amount int64 `json:"amount"`
 }
 
 type paymentRequest struct {
 	AccountID int                 `json:"account_id"`
-	Amount    float64             `json:"amount"`
+	Amount    int64               `json:"amount"`
 	Type      storage.PaymentType `json:"type"`
 }
 
