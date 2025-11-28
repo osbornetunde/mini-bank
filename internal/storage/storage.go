@@ -11,6 +11,7 @@ var (
 	ErrAccountNotFound     = errors.New("account not found")
 	ErrInsufficientFunds   = errors.New("insufficient funds")
 	ErrTransactionNotFound = errors.New("transaction not found")
+	ErrUserNotFound        = errors.New("user not found")
 )
 
 type PaymentType string
@@ -35,4 +36,5 @@ type Storage interface {
 	Payment(ctx context.Context, accountID int, amount int64, paymentType PaymentType, reference string) (*core.Account, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 	GetUsers(ctx context.Context) ([]*core.User, error)
+	GetUser(ctx context.Context, id int) (*core.User, error)
 }

@@ -1,4 +1,3 @@
-
 package core
 
 type User struct {
@@ -6,4 +5,5 @@ type User struct {
 	Email     string
 	FirstName string
 	LastName  string
+	Balance   *int
 }

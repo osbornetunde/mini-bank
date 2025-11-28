@@ -48,6 +48,14 @@ func scanTransaction(row scanner) (*core.Transaction, error) {
 	return &t, nil
 }
 
+func scanUser(row scanner) (*core.User, error) {
+	var u core.User
+	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Balance); err != nil {
+		return nil, err
+	}
+	return &u, nil
+}
+
 type scanner interface {
 	Scan(dest ...any) error
 }
@@ -333,6 +341,19 @@ func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
 		users = append(users, &user)
 	}
 	return users, nil
+}
+
+func (r *Repo) GetUser(ctx context.Context, userId int) (*core.User, error){
+	q := `SELECT u.id, u.email, u.first_name, u.last_name, a.balance FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.id = $1`
+	row := r.db.QueryRowContext(ctx, q, userId)
+	user, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return user, nil
 }
 
 // Helpers

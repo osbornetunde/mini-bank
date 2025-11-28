@@ -97,6 +97,14 @@ type usersResponse struct {
 	Email     string `json:"email"`
 }
 
+type userResponse struct {
+	ID        int    `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+	Balance   *int64 `json:"balance,omitempty"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	var req createAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -406,6 +414,43 @@ func (a *API) GetUsersHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, users)
+}
+
+func (a *API) GetUserHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	userId := r.PathValue("id")
+	id, err := strconv.Atoi(userId)
+	if err != nil {
+		a.logger.Error("invalid user id", "id", userId)
+		httpError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+
+	if userId == "" {
+		a.logger.Error("missing user id")
+		httpError(w, http.StatusBadRequest, "missing user id")
+		return
+	}
+	user, err := a.service.GetUser(ctx, id)
+	if err != nil {
+		a.logger.Error("failed to get user", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to retrieve user")
+		return
+	}
+
+	var balance *int64
+	if user.Balance != nil {
+		b := int64(*user.Balance)
+		balance = &b
+	}
+	response := &userResponse{
+		ID:        user.ID,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+		Email:     user.Email,
+		Balance:   balance,
+	}
+	jsonResponse(w, http.StatusOK, response)
 }
 
 func generateJWTToken(userID int) (string, error) {
