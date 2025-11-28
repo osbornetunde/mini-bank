@@ -18,6 +18,7 @@ type Service interface {
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 	GetUsers(ctx context.Context) ([]*core.User, error)
 	GetUser(ctx context.Context, id int) (*core.User, error)
+	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 }
 
 type service struct {
@@ -66,4 +67,8 @@ func (s *service) GetUsers(ctx context.Context) ([]*core.User, error) {
 
 func (s *service) GetUser(ctx context.Context, id int) (*core.User, error) {
 	return s.store.GetUser(ctx, id)
+}
+
+func (s *service) UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error) {
+	return s.store.UpdateUser(ctx, id, firstName, lastName, email)
 }

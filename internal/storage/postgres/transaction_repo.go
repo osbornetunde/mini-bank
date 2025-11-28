@@ -343,9 +343,23 @@ func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
 	return users, nil
 }
 
-func (r *Repo) GetUser(ctx context.Context, userId int) (*core.User, error){
-	q := `SELECT u.id, u.email, u.first_name, u.last_name, a.balance FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.id = $1`
+func (r *Repo) GetUser(ctx context.Context, userId int) (*core.User, error) {
+	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.id = $1`
 	row := r.db.QueryRowContext(ctx, q, userId)
+	user, err := scanUser(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrUserNotFound
+		}
+		return nil, err
+	}
+	return user, nil
+}
+
+func (r *Repo) UpdateUser(ctx context.Context, id int, firstName, lastName, email string) (*core.User, error) {
+	var user *core.User
+	q := `UPDATE users u SET first_name = $2, last_name = $3, email = $4 FROM accounts a WHERE u.id = $1 AND a.user_id = u.id RETURNING u.id, u.first_name, u.last_name, u.email, a.balance`
+	row := r.db.QueryRowContext(ctx, q, id, firstName, lastName, email)
 	user, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {

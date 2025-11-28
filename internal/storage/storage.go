@@ -37,4 +37,5 @@ type Storage interface {
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 	GetUsers(ctx context.Context) ([]*core.User, error)
 	GetUser(ctx context.Context, id int) (*core.User, error)
+	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 }

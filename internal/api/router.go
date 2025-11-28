@@ -20,6 +20,7 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST  /api/v1/users/create", a.CreateUserHandler)
 	mux.HandleFunc("GET /api/v1/users", a.GetUsersHandler)
 	mux.HandleFunc("GET /api/v1/users/{id}", a.GetUserHandler)
+	mux.HandleFunc("PUT /api/v1/users/{id}", a.UpdateUserHandler)
 
 	return mux
 }

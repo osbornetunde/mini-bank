@@ -453,6 +453,49 @@ func (a *API) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, response)
 }
 
+func (a *API) UpdateUserHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var updateData struct {
+		FirstName string `json:"first_name"`
+		LastName  string `json:"last_name"`
+		Email     string `json:"email"`
+	}
+
+	userId := r.PathValue("id")
+	id, err := strconv.Atoi(userId)
+	if err != nil {
+		a.logger.Error("invalid user id", "id", userId)
+		httpError(w, http.StatusBadRequest, "invalid user id")
+		return
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	user, err := a.service.UpdateUser(ctx, id, updateData.FirstName, updateData.LastName, updateData.Email)
+	if err != nil {
+		a.logger.Error("failed to update user", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to update user")
+		return
+	}
+
+	var balance *int64
+	if user.Balance != nil {
+		b := int64(*user.Balance)
+		balance = &b
+	}
+	response := &userResponse{
+		ID:        user.ID,
+		FirstName: user.FirstName,
+		LastName:  user.LastName,
+		Email:     user.Email,
+		Balance:   balance,
+	}
+	jsonResponse(w, http.StatusOK, response)
+}
+
 func generateJWTToken(userID int) (string, error) {
 	token := jwt.NewWithClaims(
 		jwt.SigningMethodHS256,
