@@ -13,22 +13,31 @@ import (
 	"mini-bank/internal/api"
 	"mini-bank/internal/service"
 	pg "mini-bank/internal/storage/postgres"
+
+	"github.com/joho/godotenv"
 )
 
 // config holds the application configuration.
 type config struct {
-	Port   string
-	DB_DSN string
+	Port    string
+	DB_DSN  string
+	JWT_KEY string
 }
 
 func main() {
 	// Setup structured logger
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
+	if err := godotenv.Load(); err != nil {
+		logger.Error("failed to load env", "err", err)
+		os.Exit(1)
+	}
+
 	// Load configuration
 	cfg := config{
-		Port:   ":8080", // Default port
-		DB_DSN: os.Getenv("DATABASE_URL"),
+		Port:    ":8080", // Default port
+		DB_DSN:  os.Getenv("DATABASE_URL"),
+		JWT_KEY: os.Getenv("JWT_SECRET"),
 	}
 	if portEnv := os.Getenv("PORT"); portEnv != "" {
 		cfg.Port = ":" + portEnv
@@ -36,6 +45,10 @@ func main() {
 
 	if cfg.DB_DSN == "" {
 		logger.Error("DATABASE_URL environment variable is not set")
+		os.Exit(1)
+	}
+	if cfg.JWT_KEY == "" {
+		logger.Error("JWT_SECRET environment variable is not set")
 		os.Exit(1)
 	}
 

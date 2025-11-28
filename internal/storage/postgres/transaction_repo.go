@@ -9,6 +9,8 @@ import (
 
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Ensure our repo implements storage.Storage partially (we'll implement methods we need)
@@ -23,16 +25,16 @@ func NewRepo(db *DB) *Repo {
 }
 
 // CreateAccount creates a new account
-func (r *Repo) CreateAccount(ctx context.Context, name string, balance int64) (*core.Account, error) {
-	const q = `INSERT INTO accounts (name, balance) VALUES ($1, $2) RETURNING id, name, balance, created_at`
-	row := r.db.QueryRowContext(ctx, q, name, balance)
+func (r *Repo) CreateAccount(ctx context.Context, userID int, balance int64) (*core.Account, error) {
+	const q = `INSERT INTO accounts (user_id, balance) VALUES ($1, $2) RETURNING id, user_id, balance, created_at`
+	row := r.db.QueryRowContext(ctx, q, userID, balance)
 	return scanAccount(row)
 }
 
 // Helper to scan account
 func scanAccount(row scanner) (*core.Account, error) {
 	var a core.Account
-	if err := row.Scan(&a.ID, &a.Name, &a.Balance, &a.CreatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.UserID, &a.Balance, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -52,7 +54,7 @@ type scanner interface {
 
 // GetAccount retrieves an account by id
 func (r *Repo) GetAccount(ctx context.Context, id int) (*core.Account, error) {
-	const q = `SELECT id, name, balance, created_at FROM accounts WHERE id = $1`
+	const q = `SELECT id, user_id, balance, created_at FROM accounts WHERE id = $1`
 	row := r.db.QueryRowContext(ctx, q, id)
 	acc, err := scanAccount(row)
 	if err != nil {
@@ -66,7 +68,7 @@ func (r *Repo) GetAccount(ctx context.Context, id int) (*core.Account, error) {
 
 // ListAccounts returns all accounts
 func (r *Repo) ListAccounts(ctx context.Context) ([]*core.Account, error) {
-	const q = `SELECT id, name, balance, created_at FROM accounts ORDER BY id`
+	const q = `SELECT id, user_id, balance, created_at FROM accounts ORDER BY id`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -97,9 +99,9 @@ func (r *Repo) Deposit(ctx context.Context, accountID int, amount int64, referen
 	defer tx.Rollback()
 
 	// Update balance and return account details
-	const upd = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, name, balance, created_at`
+	const upd = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, created_at`
 	var acc core.Account
-	if err := tx.QueryRowContext(ctx, upd, amount, accountID).Scan(&acc.ID, &acc.Name, &acc.Balance, &acc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, upd, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, storage.ErrAccountNotFound
 		}
@@ -131,9 +133,9 @@ func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, refere
 	defer tx.Rollback()
 
 	// Attempt to debit if sufficient funds exist; RETURNING gives new account details
-	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id, name, balance, created_at`
+	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id, user_id, balance, created_at`
 	var acc core.Account
-	if err := tx.QueryRowContext(ctx, debit, amount, accountID).Scan(&acc.ID, &acc.Name, &acc.Balance, &acc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, debit, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			// The atomic update failed. Let's find out why.
 			var exists bool
@@ -227,9 +229,9 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 	defer tx.Rollback()
 
 	// Withdraw from sender
-	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id, name, balance, created_at`
+	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id, user_id, balance, created_at`
 	var fromAcc core.Account
-	if err := tx.QueryRowContext(ctx, debit, amount, fromID).Scan(&fromAcc.ID, &fromAcc.Name, &fromAcc.Balance, &fromAcc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, debit, amount, fromID).Scan(&fromAcc.ID, &fromAcc.UserID, &fromAcc.Balance, &fromAcc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			// This could mean insufficient funds or the account doesn't exist.
 			// A more robust implementation could check for existence first.
@@ -239,9 +241,9 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 	}
 
 	// Deposit to receiver
-	const credit = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, name, balance, created_at`
+	const credit = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, created_at`
 	var toAcc core.Account
-	if err := tx.QueryRowContext(ctx, credit, amount, toID).Scan(&toAcc.ID, &toAcc.Name, &toAcc.Balance, &toAcc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, credit, amount, toID).Scan(&toAcc.ID, &toAcc.UserID, &toAcc.Balance, &toAcc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil, storage.ErrAccountNotFound
 		}
@@ -294,6 +296,26 @@ func (r *Repo) GetTransaction(ctx context.Context, ref string) (*core.Transactio
 	return trx, nil
 }
 
+func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error) {
+	const ins = `INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id`
+
+	var id int
+	hashedPassword, err := hashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, hashedPassword)
+	if err := row.Scan(&id); err != nil {
+		return nil, err
+	}
+
+	if _, err := r.CreateAccount(ctx, id, 0); err != nil {
+		return nil, err
+	}
+
+	return &core.User{ID: id, FirstName: firstName, LastName: lastName, Email: email}, nil
+}
+
 // Helpers
 func nullIfEmpty(s string) any {
 	if s == "" {
@@ -307,4 +329,16 @@ func nullInt(p *int) any {
 		return nil
 	}
 	return *p
+}
+
+func hashPassword(password string) (string, error) {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashedPassword), nil
+}
+
+func verifyPassword(hashedPassword string, password string) error {
+	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 }

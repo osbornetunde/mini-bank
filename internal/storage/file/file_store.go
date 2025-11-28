@@ -113,12 +113,12 @@ func (s *FileStore) saveTransactions() error {
 }
 
 // CreateAccount implements Storage interface.
-func (s *FileStore) CreateAccount(ctx context.Context, name string, initialBalance int64) (*core.Account, error) {
+func (s *FileStore) CreateAccount(ctx context.Context, userID int, initialBalance int64) (*core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.nextID++
-	acc := &core.Account{ID: s.nextID, Name: name, Balance: initialBalance}
+	acc := &core.Account{ID: s.nextID, UserID: userID, Balance: initialBalance}
 	s.accounts[acc.ID] = acc
 
 	if err := s.saveAccounts(); err != nil {

@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS users;
+
+ALTER TABLE accounts
+  DROP COLUMN user_id;

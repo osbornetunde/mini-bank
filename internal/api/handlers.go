@@ -6,14 +6,18 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"time"
 
 	"mini-bank/internal/service"
 	"mini-bank/internal/storage"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
+
+var jwtsecret = os.Getenv("JWT_SECRET")
 
 type API struct {
 	service service.Service
@@ -31,20 +35,20 @@ func jsonResponse(w http.ResponseWriter, status int, data any) {
 }
 
 type createAccountRequest struct {
-	Name           string `json:"name"`
-	InitialBalance int64  `json:"initial_balance"`
+	UserID         int   `json:"user_id"`
+	InitialBalance int64 `json:"initial_balance"`
 }
 
 type createAccountResponse struct {
 	ID        int       `json:"id"`
-	Name      string    `json:"name"`
+	UserID    int       `json:"user_id"`
 	Balance   int64     `json:"balance"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
 type getAccountResponse struct {
 	ID        int       `json:"id"`
-	Name      string    `json:"name"`
+	UserID    int       `json:"user_id"`
 	Balance   int64     `json:"balance"`
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -71,6 +75,21 @@ type paymentRequest struct {
 	Type      storage.PaymentType `json:"type"`
 }
 
+type createUserRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+	Password  string `json:"password"`
+}
+
+type createUserResponse struct {
+	ID        int    `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+	Token     string `json:"token"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	var req createAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -84,7 +103,7 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	acc, err := a.service.CreateAccount(ctx, req.Name, req.InitialBalance)
+	acc, err := a.service.CreateAccount(ctx, req.UserID, req.InitialBalance)
 	if err != nil {
 		a.logger.Error("failed to create account", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to create account")
@@ -94,7 +113,7 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := createAccountResponse{
 		ID:        acc.ID,
-		Name:      acc.Name,
+		UserID:    acc.UserID,
 		Balance:   acc.Balance,
 		CreatedAt: acc.CreatedAt,
 	}
@@ -103,8 +122,8 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateCreateAccount(req createAccountRequest) error {
-	if req.Name == "" {
-		return errors.New("name is required")
+	if req.UserID <= 0 {
+		return errors.New("invalid user id")
 	}
 
 	if req.InitialBalance < 0 {
@@ -169,7 +188,7 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := getAccountResponse{
 		ID:        acc.ID,
-		Name:      acc.Name,
+		UserID:    acc.UserID,
 		Balance:   acc.Balance,
 		CreatedAt: acc.CreatedAt,
 	}
@@ -191,7 +210,7 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	for _, acc := range accounts {
 		accountsResponse = append(accountsResponse, &getAccountResponse{
 			ID:        acc.ID,
-			Name:      acc.Name,
+			UserID:    acc.UserID,
 			Balance:   acc.Balance,
 			CreatedAt: acc.CreatedAt,
 		})
@@ -236,13 +255,13 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 	resp := transferResponse{
 		FromAccount: &getAccountResponse{
 			ID:        fromAcc.ID,
-			Name:      fromAcc.Name,
+			UserID:    fromAcc.UserID,
 			Balance:   fromAcc.Balance,
 			CreatedAt: fromAcc.CreatedAt,
 		},
 		ToAccount: &getAccountResponse{
 			ID:        toAcc.ID,
-			Name:      toAcc.Name,
+			UserID:    toAcc.UserID,
 			Balance:   toAcc.Balance,
 			CreatedAt: toAcc.CreatedAt,
 		},
@@ -283,7 +302,7 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := getAccountResponse{
 		ID:        paymentResp.ID,
-		Name:      paymentResp.Name,
+		UserID:    paymentResp.UserID,
 		Balance:   paymentResp.Balance,
 		CreatedAt: paymentResp.CreatedAt,
 	}
@@ -329,4 +348,50 @@ func (a *API) GetTransactionHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
+}
+
+func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var user createUserRequest
+	err := json.NewDecoder(r.Body).Decode(&user)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "Invalid user data")
+	}
+	resp, err := a.service.CreateUser(ctx, user.FirstName, user.LastName, user.Email, user.Password)
+	if err != nil {
+		a.logger.Error("failed to create user", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to create user")
+		return
+	}
+
+	tokenString, err := generateJWTToken(resp.ID)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "failed to generate JWT token")
+		return
+	}
+	userResponse := createUserResponse{
+		ID:        resp.ID,
+		FirstName: resp.FirstName,
+		LastName:  resp.LastName,
+		Email:     resp.Email,
+		Token:     tokenString,
+	}
+	jsonResponse(w, http.StatusOK, userResponse)
+}
+
+func generateJWTToken(userID int) (string, error) {
+	token := jwt.NewWithClaims(
+		jwt.SigningMethodHS256,
+		jwt.MapClaims{
+			"user_id": userID,
+			"exp":     time.Now().Add(time.Minute * 10).Unix(),
+			"app":     "mini-bank",
+		},
+	)
+	tokenString, err := token.SignedString([]byte(jwtsecret))
+	if err != nil {
+		return "", err
+	}
+
+	return tokenString, nil
 }

@@ -22,7 +22,7 @@ const (
 
 // Storage defines how accounts and transactions are persisted.
 type Storage interface {
-	CreateAccount(ctx context.Context, name string, initialBalance int64) (*core.Account, error)
+	CreateAccount(ctx context.Context, userID int, initialBalance int64) (*core.Account, error)
 	GetAccount(ctx context.Context, id int) (*core.Account, error)
 	ListAccounts(ctx context.Context) ([]*core.Account, error)
 	UpdateBalance(ctx context.Context, id int, newBalance int64) error
@@ -33,4 +33,5 @@ type Storage interface {
 
 	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)
 	Payment(ctx context.Context, accountID int, amount int64, paymentType PaymentType, reference string) (*core.Account, error)
+	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 }

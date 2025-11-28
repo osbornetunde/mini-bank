@@ -40,12 +40,12 @@ func (s *Store) getAccountLock(id int) *sync.Mutex {
 }
 
 // CreateAccount adds a new account to memory.
-func (s *Store) CreateAccount(ctx context.Context, name string, initialBalance int64) (*core.Account, error) {
+func (s *Store) CreateAccount(ctx context.Context, userID int, initialBalance int64) (*core.Account, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	s.nextID++
-	acc := &core.Account{ID: s.nextID, Name: name, Balance: initialBalance}
+	acc := &core.Account{ID: s.nextID, UserID: userID, Balance: initialBalance}
 	s.accounts[acc.ID] = acc
 
 	s.locksMu.Lock()
