@@ -16,6 +16,7 @@ type Service interface {
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
 	GetTransaction(ctx context.Context, reference string) (*core.Transaction, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
+	GetUsers(ctx context.Context) ([]*core.User, error)
 }
 
 type service struct {
@@ -56,4 +57,8 @@ func (s *service) GetTransaction(ctx context.Context, reference string) (*core.T
 
 func (s *service) CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error) {
 	return s.store.CreateUser(ctx, firstName, lastName, email, password)
+}
+
+func (s *service) GetUsers(ctx context.Context) ([]*core.User, error) {
+	return s.store.GetUsers(ctx)
 }

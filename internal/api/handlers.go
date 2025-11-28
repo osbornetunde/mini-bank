@@ -90,6 +90,13 @@ type createUserResponse struct {
 	Token     string `json:"token"`
 }
 
+type usersResponse struct {
+	ID        int    `json:"id"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	var req createAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -377,6 +384,28 @@ func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		Token:     tokenString,
 	}
 	jsonResponse(w, http.StatusOK, userResponse)
+}
+
+func (a *API) GetUsersHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	resp, err := a.service.GetUsers(ctx)
+	if err != nil {
+		a.logger.Error("failed to get users", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to retrieve users")
+		return
+	}
+
+	var users []*usersResponse
+	for _, user := range resp {
+		users = append(users, &usersResponse{
+			ID:        user.ID,
+			FirstName: user.FirstName,
+			LastName:  user.LastName,
+			Email:     user.Email,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, users)
 }
 
 func generateJWTToken(userID int) (string, error) {

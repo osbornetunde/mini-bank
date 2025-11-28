@@ -316,6 +316,25 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 	return &core.User{ID: id, FirstName: firstName, LastName: lastName, Email: email}, nil
 }
 
+func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
+	q := `SELECT id, email, first_name, last_name FROM users`
+	rows, err := r.db.QueryContext(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var users []*core.User
+
+	for rows.Next() {
+		var user core.User
+		if err := rows.Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName); err != nil {
+			return nil, err
+		}
+		users = append(users, &user)
+	}
+	return users, nil
+}
+
 // Helpers
 func nullIfEmpty(s string) any {
 	if s == "" {
