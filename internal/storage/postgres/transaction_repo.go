@@ -10,6 +10,7 @@ import (
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -314,7 +315,16 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 	}
 	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, hashedPassword)
 	if err := row.Scan(&id); err != nil {
-		return nil, err
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			switch pgErr.ConstraintName {
+			case "users_email_key":
+				return nil, storage.ErrDuplicateEmail
+			default:
+				return nil, errors.New("duplicate entry")
+			}
+		}
+		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
 	if _, err := r.CreateAccount(ctx, id, 0); err != nil {
@@ -368,6 +378,25 @@ func (r *Repo) UpdateUser(ctx context.Context, id int, firstName, lastName, emai
 		return nil, err
 	}
 	return user, nil
+}
+
+func (r *Repo) DeleteUser(ctx context.Context, id int) error {
+	q := `DELETE FROM users WHERE id = $1`
+
+	result, err := r.db.ExecContext(ctx, q, id)
+	if err != nil {
+		return fmt.Errorf("failed to delete user: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return storage.ErrUserNotFound
+	}
+	return nil
 }
 
 // Helpers

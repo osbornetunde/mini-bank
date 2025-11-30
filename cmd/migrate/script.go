@@ -15,7 +15,6 @@ func main() {
 		log.Fatal("DATABASE_URL is not set")
 	}
 
-	// I used "pgx" driver here because "postgres" (lib/pq) wasn't available
 	db, err := sql.Open("pgx", dbURL)
 	if err != nil {
 		log.Fatalf("failed to open db: %v", err)
@@ -26,13 +25,17 @@ func main() {
 		log.Fatalf("failed to ping db: %v", err)
 	}
 
-	migration := `
-	ALTER TABLE accounts
-    ALTER COLUMN balance TYPE BIGINT USING (balance * 100)::BIGINT;
+	if len(os.Args) < 2 {
+		log.Fatal("Usage: go run cmd/migrate/script.go <path-to-migration-file>")
+	}
+	migrationFile := os.Args[1]
 
-	ALTER TABLE transactions
-    ALTER COLUMN amount TYPE BIGINT USING (amount * 100)::BIGINT;
-	`
+	// Read the migration file
+	migrationBytes, err := os.ReadFile(migrationFile)
+	if err != nil {
+		log.Fatalf("failed to read migration file: %v", err)
+	}
+	migration := string(migrationBytes)
 
 	_, err = db.Exec(migration)
 	if err != nil {

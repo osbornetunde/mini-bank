@@ -374,8 +374,17 @@ func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := a.service.CreateUser(ctx, user.FirstName, user.LastName, user.Email, user.Password)
 	if err != nil {
-		a.logger.Error("failed to create user", "err", err)
-		httpError(w, http.StatusInternalServerError, "failed to create user")
+		switch {
+		case errors.Is(err, storage.ErrDuplicateEmail):
+			jsonResponse(w, http.StatusConflict, map[string]string{
+				"error": "A user with this email already exists",
+			})
+		default:
+			a.logger.Error("failed to create user", "err", err)
+			jsonResponse(w, http.StatusInternalServerError, map[string]string{
+				"error": "Failed to create user",
+			})
+		}
 		return
 	}
 
@@ -494,6 +503,26 @@ func (a *API) UpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 		Balance:   balance,
 	}
 	jsonResponse(w, http.StatusOK, response)
+}
+
+func (a *API) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	userId := r.PathValue("id")
+	id, err := strconv.Atoi(userId)
+	if err != nil {
+		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	err = a.service.DeleteUser(ctx, id)
+	if err != nil {
+		a.logger.Error("failed to delete user", "err", err)
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"message": "user deleted successfully"})
 }
 
 func generateJWTToken(userID int) (string, error) {

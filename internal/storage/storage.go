@@ -12,6 +12,7 @@ var (
 	ErrInsufficientFunds   = errors.New("insufficient funds")
 	ErrTransactionNotFound = errors.New("transaction not found")
 	ErrUserNotFound        = errors.New("user not found")
+	ErrDuplicateEmail      = errors.New("duplicate email")
 )
 
 type PaymentType string
@@ -38,4 +39,5 @@ type Storage interface {
 	GetUsers(ctx context.Context) ([]*core.User, error)
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
+	DeleteUser(ctx context.Context, id int) error
 }

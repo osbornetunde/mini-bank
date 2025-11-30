@@ -21,6 +21,7 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("GET /api/v1/users", a.GetUsersHandler)
 	mux.HandleFunc("GET /api/v1/users/{id}", a.GetUserHandler)
 	mux.HandleFunc("PUT /api/v1/users/{id}", a.UpdateUserHandler)
+	mux.HandleFunc("DELETE /api/v1/users/{id}", a.DeleteUserHandler)
 
 	return mux
 }
