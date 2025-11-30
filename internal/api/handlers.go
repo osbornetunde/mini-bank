@@ -105,6 +105,15 @@ type userResponse struct {
 	Balance   *int64 `json:"balance,omitempty"`
 }
 
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+
+type LoginResponse struct {
+	Token string `json:"token"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	var req createAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -523,6 +532,38 @@ func (a *API) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	jsonResponse(w, http.StatusOK, map[string]string{"message": "user deleted successfully"})
+}
+
+func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var request LoginRequest
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if request.Email == "" || request.Password == "" {
+		http.Error(w, "email and password are required", http.StatusBadRequest)
+		return
+	}
+
+	data, err := a.service.Login(ctx, request.Email, request.Password)
+	if err != nil {
+		// We log the actual error for debugging but return a generic message to the user
+		a.logger.Warn("login failed", "email", request.Email, "err", err)
+		jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
+		return
+	}
+
+	token, err := generateJWTToken(data.ID)
+	if err != nil {
+		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"token": token})
 }
 
 func generateJWTToken(userID int) (string, error) {
