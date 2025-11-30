@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 var jwtsecret = os.Getenv("JWT_SECRET")
@@ -22,10 +24,11 @@ var jwtsecret = os.Getenv("JWT_SECRET")
 type API struct {
 	service service.Service
 	logger  *slog.Logger
+	redis   *redis.Client
 }
 
-func NewAPI(s service.Service, logger *slog.Logger) *API {
-	return &API{service: s, logger: logger}
+func NewAPI(s service.Service, logger *slog.Logger, rdb *redis.Client) *API {
+	return &API{service: s, logger: logger, redis: rdb}
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -111,6 +114,14 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
+	Token string `json:"token"`
+}
+
+type RefreshTokenRequest struct {
+	RefreshToken string `json:"refresh_token"`
+}
+
+type RefreshTokenResponse struct {
 	Token string `json:"token"`
 }
 
@@ -563,7 +574,48 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jsonResponse(w, http.StatusOK, map[string]string{"token": token})
+	refreshToken, err := a.generateRefreshToken(data.ID)
+	if err != nil {
+		http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"token": token, "refresh_token": refreshToken})
+}
+
+func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var request RefreshTokenRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	key := fmt.Sprintf("session:%s", request.RefreshToken)
+	userIDstr, err := a.redis.Get(ctx, key).Result()
+	if err == redis.Nil {
+		http.Error(w, "invalid token", http.StatusUnauthorized)
+		return
+	} else if err != nil {
+		http.Error(w, "failed to get token", http.StatusInternalServerError)
+		return
+	}
+	userID, _ := strconv.Atoi(userIDstr)
+	a.logger.Info("Refreshing token for user", "user_id", userIDstr)
+	newToken, err := generateJWTToken(userID)
+	if err != nil {
+		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		return
+	}
+
+	newRefreshToken, err := a.generateRefreshToken(userID)
+	if err != nil {
+		http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"token": newToken, "refresh_token": newRefreshToken})
 }
 
 func generateJWTToken(userID int) (string, error) {
@@ -581,4 +633,17 @@ func generateJWTToken(userID int) (string, error) {
 	}
 
 	return tokenString, nil
+}
+
+func (a *API) generateRefreshToken(userID int) (string, error) {
+	token := uuid.New().String()
+
+	key := fmt.Sprintf("session:%s", token)
+
+	err := a.redis.Set(context.Background(), key, userID, time.Hour*24*7).Err()
+	if err != nil {
+		return "", err
+	}
+
+	return token, nil
 }

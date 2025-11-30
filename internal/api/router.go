@@ -15,16 +15,17 @@ func (a *API) Router() http.Handler {
 	mux.HandleFunc("POST /api/v1/transactions/payment", a.PaymentHandler)
 	mux.HandleFunc("GET /api/v1/accounts/{id}/transactions", a.GetTransactionsHandler)
 	mux.HandleFunc("GET /api/v1/transactions/{ref}", a.GetTransactionHandler)
-	
+
 	// User routes
 	mux.HandleFunc("POST  /api/v1/users/create", a.CreateUserHandler)
 	mux.HandleFunc("GET /api/v1/users", a.GetUsersHandler)
 	mux.HandleFunc("GET /api/v1/users/{id}", a.GetUserHandler)
 	mux.HandleFunc("PUT /api/v1/users/{id}", a.UpdateUserHandler)
 	mux.HandleFunc("DELETE /api/v1/users/{id}", a.DeleteUserHandler)
-	
-	//Authentication routes
+
+	// Authentication routes
 	mux.HandleFunc("POST /api/v1/login", a.LoginHandler)
+	mux.HandleFunc("POST /api/v1/refresh", a.RefreshTokenHandler)
 
 	return mux
 }

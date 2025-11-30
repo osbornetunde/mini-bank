@@ -15,13 +15,15 @@ import (
 	pg "mini-bank/internal/storage/postgres"
 
 	"github.com/joho/godotenv"
+	"github.com/redis/go-redis/v9"
 )
 
 // config holds the application configuration.
 type config struct {
-	Port    string
-	DB_DSN  string
-	JWT_KEY string
+	Port       string
+	DB_DSN     string
+	JWT_KEY    string
+	REDIS_ADDR string
 }
 
 func main() {
@@ -35,9 +37,10 @@ func main() {
 
 	// Load configuration
 	cfg := config{
-		Port:    ":8080", // Default port
-		DB_DSN:  os.Getenv("DATABASE_URL"),
-		JWT_KEY: os.Getenv("JWT_SECRET"),
+		Port:       ":8080", // Default port
+		DB_DSN:     os.Getenv("DATABASE_URL"),
+		JWT_KEY:    os.Getenv("JWT_SECRET"),
+		REDIS_ADDR: os.Getenv("REDIS_ADDR"),
 	}
 	if portEnv := os.Getenv("PORT"); portEnv != "" {
 		cfg.Port = ":" + portEnv
@@ -58,9 +61,18 @@ func main() {
 		os.Exit(1)
 	}
 
+	rdb := redis.NewClient(&redis.Options{
+		Addr: cfg.REDIS_ADDR,
+	})
+
+	if err := rdb.Ping(context.Background()).Err(); err != nil {
+		logger.Error("failed to connect to redis", "err", err)
+		os.Exit(1)
+	}
+
 	repo := pg.NewRepo(db)
 	service := service.New(repo)
-	a := api.NewAPI(service, logger)
+	a := api.NewAPI(service, logger, rdb)
 	handler := a.Router()
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
 	handler = a.LoggingMiddleware(handler)
