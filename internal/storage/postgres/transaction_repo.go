@@ -11,7 +11,6 @@ import (
 	"mini-bank/internal/storage"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"golang.org/x/crypto/bcrypt"
 )
 
 // Ensure our repo implements storage.Storage partially (we'll implement methods we need)
@@ -309,11 +308,8 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 	const ins = `INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id`
 
 	var id int
-	hashedPassword, err := hashPassword(password)
-	if err != nil {
-		return nil, err
-	}
-	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, hashedPassword)
+
+	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, password)
 	if err := row.Scan(&id); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -399,6 +395,20 @@ func (r *Repo) DeleteUser(ctx context.Context, id int) error {
 	return nil
 }
 
+func (r *Repo) GetUserByEmail(ctx context.Context, email string) (*core.User, error) {
+	q := `SELECT id, email, password, first_name, last_name FROM users WHERE email = $1`
+
+	var user core.User
+
+	if err := r.db.QueryRowContext(ctx, q, email).Scan(&user.ID, &user.Email, &user.Password, &user.FirstName, &user.LastName); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, storage.ErrUserNotFound
+		}
+		return nil, fmt.Errorf("failed to get user by email: %w", err)
+	}
+	return &user, nil
+}
+
 // Helpers
 func nullIfEmpty(s string) any {
 	if s == "" {
@@ -414,14 +424,4 @@ func nullInt(p *int) any {
 	return *p
 }
 
-func hashPassword(password string) (string, error) {
-	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
-		return "", err
-	}
-	return string(hashedPassword), nil
-}
 
-func verifyPassword(hashedPassword string, password string) error {
-	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
-}

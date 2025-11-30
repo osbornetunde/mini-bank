@@ -2,9 +2,12 @@ package service
 
 import (
 	"context"
+	"errors"
 
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 type Service interface {
@@ -20,6 +23,7 @@ type Service interface {
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
+	Login(ctx context.Context, email string, password string) (*core.User, error)
 }
 
 type service struct {
@@ -59,7 +63,11 @@ func (s *service) GetTransaction(ctx context.Context, reference string) (*core.T
 }
 
 func (s *service) CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error) {
-	return s.store.CreateUser(ctx, firstName, lastName, email, password)
+	hashedPassword, err := hashPassword(password)
+	if err != nil {
+		return nil, err
+	}
+	return s.store.CreateUser(ctx, firstName, lastName, email, hashedPassword)
 }
 
 func (s *service) GetUsers(ctx context.Context) ([]*core.User, error) {
@@ -76,4 +84,33 @@ func (s *service) UpdateUser(ctx context.Context, id int, firstName string, last
 
 func (s *service) DeleteUser(ctx context.Context, id int) error {
 	return s.store.DeleteUser(ctx, id)
+}
+
+func (s *service) Login(ctx context.Context, email string, password string) (*core.User, error) {
+	user, err := s.store.GetUserByEmail(ctx, email)
+	if err != nil {
+		// If user not found, we return InvalidCredentials to avoid enumeration
+		if errors.Is(err, storage.ErrUserNotFound) {
+			return nil, storage.ErrInvalidCredentials
+		}
+		return nil, err
+	}
+
+	if err := verifyPassword(*user.Password, password); err != nil {
+		return nil, storage.ErrInvalidCredentials
+	}
+
+	return user, nil
+}
+
+func hashPassword(password string) (string, error) {
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hashedPassword), nil
+}
+
+func verifyPassword(hashedPassword string, password string) error {
+	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
 }

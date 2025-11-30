@@ -13,6 +13,7 @@ var (
 	ErrTransactionNotFound = errors.New("transaction not found")
 	ErrUserNotFound        = errors.New("user not found")
 	ErrDuplicateEmail      = errors.New("duplicate email")
+	ErrInvalidCredentials  = errors.New("invalid credentials")
 )
 
 type PaymentType string
@@ -40,4 +41,5 @@ type Storage interface {
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
+	GetUserByEmail(ctx context.Context, email string) (*core.User, error)
 }
