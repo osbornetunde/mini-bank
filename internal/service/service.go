@@ -67,7 +67,14 @@ func (s *service) CreateUser(ctx context.Context, firstName string, lastName str
 	if err != nil {
 		return nil, err
 	}
-	return s.store.CreateUser(ctx, firstName, lastName, email, hashedPassword)
+	res, err := s.store.CreateUser(ctx, firstName, lastName, email, hashedPassword)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.store.CreateAccount(ctx, res.ID, 0); err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 func (s *service) GetUsers(ctx context.Context) ([]*core.User, error) {

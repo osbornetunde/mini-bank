@@ -323,10 +323,6 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	if _, err := r.CreateAccount(ctx, id, 0); err != nil {
-		return nil, err
-	}
-
 	return &core.User{ID: id, FirstName: firstName, LastName: lastName, Email: email}, nil
 }
 
