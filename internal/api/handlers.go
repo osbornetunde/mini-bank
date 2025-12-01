@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
@@ -19,16 +18,15 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-var jwtsecret = os.Getenv("JWT_SECRET")
-
 type API struct {
-	service service.Service
-	logger  *slog.Logger
-	redis   *redis.Client
+	service   service.Service
+	logger    *slog.Logger
+	redis     *redis.Client
+	jwtSecret string
 }
 
-func NewAPI(s service.Service, logger *slog.Logger, rdb *redis.Client) *API {
-	return &API{service: s, logger: logger, redis: rdb}
+func NewAPI(s service.Service, logger *slog.Logger, rdb *redis.Client, jwtSecret string) *API {
+	return &API{service: s, logger: logger, redis: rdb, jwtSecret: jwtSecret}
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -408,7 +406,7 @@ func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, err := generateJWTToken(resp.ID)
+	tokenString, err := a.generateJWTToken(resp.ID)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to generate JWT token")
 		return
@@ -568,7 +566,7 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := generateJWTToken(data.ID)
+	token, err := a.generateJWTToken(data.ID)
 	if err != nil {
 		http.Error(w, "failed to generate token", http.StatusInternalServerError)
 		return
@@ -603,7 +601,7 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	userID, _ := strconv.Atoi(userIDstr)
 	a.logger.Info("Refreshing token for user", "user_id", userIDstr)
-	newToken, err := generateJWTToken(userID)
+	newToken, err := a.generateJWTToken(userID)
 	if err != nil {
 		http.Error(w, "failed to generate token", http.StatusInternalServerError)
 		return
@@ -618,7 +616,7 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]string{"token": newToken, "refresh_token": newRefreshToken})
 }
 
-func generateJWTToken(userID int) (string, error) {
+func (a *API) generateJWTToken(userID int) (string, error) {
 	token := jwt.NewWithClaims(
 		jwt.SigningMethodHS256,
 		jwt.MapClaims{
@@ -627,7 +625,7 @@ func generateJWTToken(userID int) (string, error) {
 			"app":     "mini-bank",
 		},
 	)
-	tokenString, err := token.SignedString([]byte(jwtsecret))
+	tokenString, err := token.SignedString([]byte(a.jwtSecret))
 	if err != nil {
 		return "", err
 	}

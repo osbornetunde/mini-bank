@@ -72,7 +72,7 @@ func main() {
 
 	repo := pg.NewRepo(db)
 	service := service.New(repo)
-	a := api.NewAPI(service, logger, rdb)
+	a := api.NewAPI(service, logger, rdb, cfg.JWT_KEY)
 	handler := a.Router()
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
 	handler = a.LoggingMiddleware(handler)
