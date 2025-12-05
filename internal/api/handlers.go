@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"mini-bank/internal/core"
 	"mini-bank/internal/service"
 	"mini-bank/internal/storage"
 
@@ -198,6 +199,35 @@ func httpError(w http.ResponseWriter, status int, message string) {
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
+
+func (a *API) getAuthorizedAccount(w http.ResponseWriter, r *http.Request, accountID int) *core.Account {
+	ctx := r.Context()
+
+	userID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return nil
+	}
+
+	acc, err := a.service.GetAccount(ctx, accountID)
+	if err != nil {
+		if errors.Is(err, storage.ErrAccountNotFound) {
+			httpError(w, http.StatusNotFound, "account not found")
+			return nil
+		}
+		a.logger.Error("failed to get account", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to retrieve account")
+		return nil
+	}
+
+	if acc.UserID != userID {
+		httpError(w, http.StatusForbidden, "forbidden")
+		return nil
+	}
+
+	return acc
+}
+
 func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := strconv.Atoi(idStr)
@@ -206,17 +236,9 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx := r.Context()
-	acc, err := a.service.GetAccount(ctx, id)
-	if err != nil {
-		if errors.Is(err, storage.ErrAccountNotFound) {
-			httpError(w, http.StatusNotFound, "account not found")
-			return
-		}
-		a.logger.Error("failed to get account", "err", err)
-		httpError(w, http.StatusInternalServerError, "failed to get account")
+	acc := a.getAuthorizedAccount(w, r, id)
+	if acc == nil {
 		return
-
 	}
 
 	resp := getAccountResponse{
@@ -239,8 +261,17 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var accountsResponse []*getAccountResponse
+	
+	userID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
 
 	for _, acc := range accounts {
+		if acc.UserID != userID {
+			continue
+		}
 		accountsResponse = append(accountsResponse, &getAccountResponse{
 			ID:        acc.ID,
 			UserID:    acc.UserID,
@@ -266,6 +297,28 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	if err := validateTransferRequest(req); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	userID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	fromAccount, err := a.service.GetAccount(ctx, req.FromID)
+	if err != nil {
+		if errors.Is(err, storage.ErrAccountNotFound) {
+			httpError(w, http.StatusNotFound, "sender account not found")
+			return
+		}
+		a.logger.Error("failed to get sender account", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to process transfer")
+		return
+	}
+
+	if fromAccount.UserID != userID {
+		httpError(w, http.StatusForbidden, "you can only transfer from your own accounts")
 		return
 	}
 
@@ -316,6 +369,11 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	acc := a.getAuthorizedAccount(w, r, req.AccountID)
+	if acc == nil {
+		return
+	}
+
 	reference := uuid.NewString()
 
 	paymentResp, err := a.service.Payment(ctx, req.AccountID, req.Amount, req.Type, reference)
@@ -348,6 +406,11 @@ func (a *API) GetTransactionsHandler(w http.ResponseWriter, r *http.Request) {
 	accountID, err := strconv.Atoi(idStr)
 	if err != nil || accountID <= 0 {
 		httpError(w, http.StatusBadRequest, "Invalid account ID")
+		return
+	}
+
+	acc := a.getAuthorizedAccount(w, r, accountID)
+	if acc == nil {
 		return
 	}
 
@@ -458,6 +521,18 @@ func (a *API) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "missing user id")
 		return
 	}
+
+	authUserID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if id != authUserID {
+		httpError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	user, err := a.service.GetUser(ctx, id)
 	if err != nil {
 		a.logger.Error("failed to get user", "err", err)
@@ -501,6 +576,18 @@ func (a *API) UpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	authUserID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if id != authUserID {
+		httpError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	user, err := a.service.UpdateUser(ctx, id, updateData.FirstName, updateData.LastName, updateData.Email)
 	if err != nil {
 		a.logger.Error("failed to update user", "err", err)
@@ -530,6 +617,17 @@ func (a *API) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(userId)
 	if err != nil {
 		http.Error(w, "invalid user id", http.StatusBadRequest)
+		return
+	}
+
+	authUserID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	if id != authUserID {
+		httpError(w, http.StatusForbidden, "forbidden")
 		return
 	}
 

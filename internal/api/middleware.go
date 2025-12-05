@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-
 )
 
 // responseRecorder wraps http.ResponseWriter to capture the status code.
@@ -26,6 +26,11 @@ func (rr *responseRecorder) WriteHeader(statusCode int) {
 	rr.statusCode = statusCode
 	rr.ResponseWriter.WriteHeader(statusCode)
 }
+
+
+type contextKey string
+
+const contextKeyUserID contextKey = "user_id"
 
 // LoggingMiddleware logs details about each incoming request.
 func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
@@ -56,7 +61,6 @@ func (a *API) TimeoutMiddleware(next http.Handler, timeout time.Duration) http.H
 	})
 }
 
-
 func (a *API) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -66,14 +70,13 @@ func (a *API) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		tokenString := ""
-		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-			tokenString = authHeader[7:]
-		} else {
-			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
-			return
-		}
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+				http.Error(w, "Invalid Authorization Header", http.StatusUnauthorized)
+				return
+			}
+		tokenString = authHeader[7:]
 
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 			}
@@ -98,7 +101,34 @@ func (a *API) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), "user_id", int(userIDFloat))
+		ctx := context.WithValue(r.Context(), contextKeyUserID, int(userIDFloat))
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (a *API) AuthenticationMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+
+		if authHeader == "" {
+			http.Error(w, "Authorization header required", http.StatusUnauthorized)
+			return
+		}
+		if !strings.HasPrefix(authHeader, "Bearer") {
+			http.Error(w, "Invalid Authorization Header", http.StatusUnauthorized)
+			return
+		}
+		tokenString := authHeader[7:]
+
+		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
+			return []byte(a.jwtSecret), nil
+		})
+		if err != nil || !token.Valid {
+			http.Error(w, "Invalid token or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}
 }
