@@ -131,7 +131,7 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateCreateAccount(req); err != nil {
+	if err := req.Validate(); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -155,43 +155,8 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusCreated, resp)
 }
 
-func validateCreateAccount(req createAccountRequest) error {
-	if req.UserID <= 0 {
-		return errors.New("invalid user id")
-	}
 
-	if req.InitialBalance < 0 {
-		return errors.New("initial balance must be positive")
-	}
 
-	return nil
-}
-
-func validateTransferRequest(req transferRequest) error {
-	if req.Amount <= 0 {
-		return errors.New("amount must be greater than zero")
-	}
-	if req.FromID == req.ToID {
-		return errors.New("sender and receiver accounts cannot be the same")
-	}
-	if req.FromID <= 0 {
-		return errors.New("invalid sender account id")
-	}
-	if req.ToID <= 0 {
-		return errors.New("invalid receiver account id")
-	}
-	return nil
-}
-
-func validatePaymentRequest(req paymentRequest) error {
-	if req.Amount <= 0 {
-		return errors.New("amount must be greater than zero")
-	}
-	if req.AccountID <= 0 {
-		return errors.New("account ID must be greater than zero")
-	}
-	return nil
-}
 
 func httpError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -295,7 +260,7 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := validateTransferRequest(req); err != nil {
+	if err := req.Validate(); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -364,7 +329,7 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 		httpError(w, http.StatusBadRequest, "Invalid JSON body")
 		return
 	}
-	if err := validatePaymentRequest(req); err != nil {
+	if err := req.Validate(); err != nil {
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -449,9 +414,13 @@ func (a *API) GetTransactionHandler(w http.ResponseWriter, r *http.Request) {
 func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var user createUserRequest
-	err := json.NewDecoder(r.Body).Decode(&user)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&user); err != nil {
 		httpError(w, http.StatusBadRequest, "Invalid user data")
+		return
+	}
+	if err := user.Validate(); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 	resp, err := a.service.CreateUser(ctx, user.FirstName, user.LastName, user.Email, user.Password)
 	if err != nil {
@@ -511,14 +480,7 @@ func (a *API) GetUserHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.PathValue("id")
 	id, err := strconv.Atoi(userId)
 	if err != nil {
-		a.logger.Error("invalid user id", "id", userId)
 		httpError(w, http.StatusBadRequest, "invalid user id")
-		return
-	}
-
-	if userId == "" {
-		a.logger.Error("missing user id")
-		httpError(w, http.StatusBadRequest, "missing user id")
 		return
 	}
 
@@ -567,13 +529,12 @@ func (a *API) UpdateUserHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.PathValue("id")
 	id, err := strconv.Atoi(userId)
 	if err != nil {
-		a.logger.Error("invalid user id", "id", userId)
 		httpError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&updateData); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
@@ -616,7 +577,7 @@ func (a *API) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	userId := r.PathValue("id")
 	id, err := strconv.Atoi(userId)
 	if err != nil {
-		http.Error(w, "invalid user id", http.StatusBadRequest)
+		httpError(w, http.StatusBadRequest, "invalid user id")
 		return
 	}
 
@@ -634,7 +595,7 @@ func (a *API) DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 	err = a.service.DeleteUser(ctx, id)
 	if err != nil {
 		a.logger.Error("failed to delete user", "err", err)
-		httpError(w, http.StatusInternalServerError, err.Error())
+		httpError(w, http.StatusInternalServerError, "failed to delete user")
 		return
 	}
 
@@ -647,12 +608,12 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	var request LoginRequest
 
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		httpError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	if request.Email == "" || request.Password == "" {
-		http.Error(w, "email and password are required", http.StatusBadRequest)
+		httpError(w, http.StatusBadRequest, "email and password are required")
 		return
 	}
 
@@ -660,19 +621,19 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// We log the actual error for debugging but return a generic message to the user
 		a.logger.Warn("login failed", "email", request.Email, "err", err)
-		jsonResponse(w, http.StatusUnauthorized, map[string]string{"error": "Invalid email or password"})
+		httpError(w, http.StatusUnauthorized, "Invalid email or password")
 		return
 	}
 
 	token, err := a.generateJWTToken(data.ID)
 	if err != nil {
-		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		httpError(w, http.StatusInternalServerError, "failed to generate token")
 		return
 	}
 
-	refreshToken, err := a.generateRefreshToken(data.ID)
+	refreshToken, err := a.generateRefreshToken(ctx, data.ID)
 	if err != nil {
-		http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+		httpError(w, http.StatusInternalServerError, "failed to generate refresh token")
 		return
 	}
 
@@ -684,30 +645,41 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 
 	var request RefreshTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		httpError(w, http.StatusBadRequest, "invalid request")
 		return
 	}
 
 	key := fmt.Sprintf("session:%s", request.RefreshToken)
 	userIDstr, err := a.redis.Get(ctx, key).Result()
 	if err == redis.Nil {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+		httpError(w, http.StatusUnauthorized, "invalid token")
 		return
 	} else if err != nil {
-		http.Error(w, "failed to get token", http.StatusInternalServerError)
-		return
-	}
-	userID, _ := strconv.Atoi(userIDstr)
-	a.logger.Info("Refreshing token for user", "user_id", userIDstr)
-	newToken, err := a.generateJWTToken(userID)
-	if err != nil {
-		http.Error(w, "failed to generate token", http.StatusInternalServerError)
+		httpError(w, http.StatusInternalServerError, "failed to get token")
 		return
 	}
 
-	newRefreshToken, err := a.generateRefreshToken(userID)
+	userID, err := strconv.Atoi(userIDstr)
 	if err != nil {
-		http.Error(w, "failed to generate refresh token", http.StatusInternalServerError)
+		a.logger.Error("invalid user ID in refresh token", "user_id", userIDstr, "err", err)
+		httpError(w, http.StatusInternalServerError, "invalid session data")
+		return
+	}
+
+	// Invalidate the old refresh token to prevent reuse
+	if err := a.redis.Del(ctx, key).Err(); err != nil {
+		a.logger.Error("failed to delete old refresh token", "err", err)
+	}
+
+	newToken, err := a.generateJWTToken(userID)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "failed to generate token")
+		return
+	}
+
+	newRefreshToken, err := a.generateRefreshToken(ctx, userID)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "failed to generate refresh token")
 		return
 	}
 
@@ -731,12 +703,12 @@ func (a *API) generateJWTToken(userID int) (string, error) {
 	return tokenString, nil
 }
 
-func (a *API) generateRefreshToken(userID int) (string, error) {
+func (a *API) generateRefreshToken(ctx context.Context, userID int) (string, error) {
 	token := uuid.New().String()
 
 	key := fmt.Sprintf("session:%s", token)
 
-	err := a.redis.Set(context.Background(), key, userID, time.Hour*24*7).Err()
+	err := a.redis.Set(ctx, key, userID, time.Hour*24*7).Err()
 	if err != nil {
 		return "", err
 	}
