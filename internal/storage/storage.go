@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"errors"
+	"time"
 
 	"mini-bank/internal/core"
 )
@@ -14,6 +15,7 @@ var (
 	ErrUserNotFound        = errors.New("user not found")
 	ErrDuplicateEmail      = errors.New("duplicate email")
 	ErrInvalidCredentials  = errors.New("invalid credentials")
+	ErrInvalidResetToken   = errors.New("invalid or expired reset token")
 )
 
 type PaymentType string
@@ -42,4 +44,12 @@ type Storage interface {
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
 	GetUserByEmail(ctx context.Context, email string) (*core.User, error)
+
+	CreatePasswordResetToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error
+	GetPasswordResetToken(ctx context.Context, tokenHash string) (userID int, expiresAt time.Time, usedAt *time.Time, err error)
+	MarkPasswordResetTokenAsUsed(ctx context.Context, tokenHash string) error
+	InvalidateUserPasswordResetTokens(ctx context.Context, userID int) error
+	UpdateUserPassword(ctx context.Context, userID int, hashedPassword string) error
+	CleanupExpiredPasswordResetTokens(ctx context.Context) (int64, error)
+	ResetPasswordTx(ctx context.Context, tokenHash string, hashedPassword string) (userID int, err error)
 }

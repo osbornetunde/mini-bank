@@ -113,7 +113,8 @@ type LoginRequest struct {
 }
 
 type LoginResponse struct {
-	Token string `json:"token"`
+	Token        string `json:"token"`
+	RefreshToken string `json:"refresh_token"`
 }
 
 type RefreshTokenRequest struct {
@@ -122,6 +123,23 @@ type RefreshTokenRequest struct {
 
 type RefreshTokenResponse struct {
 	Token string `json:"token"`
+}
+
+type RequestPasswordResetRequest struct {
+	Email string `json:"email"`
+}
+
+type RequestPasswordResetResponse struct {
+	Message string `json:"message"`
+}
+
+type ResetPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+type ResetPasswordResponse struct {
+	Message string `json:"message"`
 }
 
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
@@ -155,15 +173,11 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusCreated, resp)
 }
 
-
-
-
 func httpError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
-
 
 func (a *API) getAuthorizedAccount(w http.ResponseWriter, r *http.Request, accountID int) *core.Account {
 	ctx := r.Context()
@@ -226,7 +240,7 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var accountsResponse []*getAccountResponse
-	
+
 	userID, ok := ctx.Value(contextKeyUserID).(int)
 	if !ok {
 		httpError(w, http.StatusUnauthorized, "unauthorized")
@@ -666,7 +680,6 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Invalidate the old refresh token to prevent reuse
 	if err := a.redis.Del(ctx, key).Err(); err != nil {
 		a.logger.Error("failed to delete old refresh token", "err", err)
 	}
@@ -713,5 +726,100 @@ func (a *API) generateRefreshToken(ctx context.Context, userID int) (string, err
 		return "", err
 	}
 
+	setKey := fmt.Sprintf("user_sessions:%d", userID)
+	err = a.redis.SAdd(ctx, setKey, token).Err()
+	if err != nil {
+		// If we fail to track it, we should probably delete the session to be safe,
+		// but for now we'll just log and continue or return error.
+		// Returning error is safer to ensure consistency.
+		a.redis.Del(ctx, key)
+		return "", err
+	}
+	a.redis.Expire(ctx, setKey, time.Hour*24*7)
+
 	return token, nil
+}
+
+func (a *API) RequestPasswordResetHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var request RequestPasswordResetRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := request.Validate(); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Don't log or return the token to the user
+	if _, err := a.service.RequestPasswordReset(ctx, request.Email); err != nil {
+		a.logger.Error("failed to create password reset token", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to process password reset request")
+		return
+	}
+
+	// Always return success to prevent user enumeration
+	jsonResponse(w, http.StatusOK, RequestPasswordResetResponse{
+		Message: "If the email exists, a password reset link will be sent",
+	})
+}
+
+func (a *API) ResetPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	var request ResetPasswordRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := request.Validate(); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	user, err := a.service.ResetPassword(ctx, request.Token, request.NewPassword)
+	if err != nil {
+		if errors.Is(err, storage.ErrInvalidResetToken) {
+			httpError(w, http.StatusBadRequest, "invalid or expired reset token")
+			return
+		}
+		a.logger.Error("failed to reset password", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to reset password")
+		return
+	}
+
+	if err := a.invalidateUserSessions(ctx, user.ID); err != nil {
+		// Log error but don't fail the request as password is already reset
+		a.logger.Error("failed to invalidate sessions after password reset", "user_id", user.ID, "err", err)
+	}
+
+	jsonResponse(w, http.StatusOK, ResetPasswordResponse{
+		Message: "password reset successfully",
+	})
+}
+
+func (a *API) invalidateUserSessions(ctx context.Context, userID int) error {
+	// Get all sessions for the user
+	setKey := fmt.Sprintf("user_sessions:%d", userID)
+	tokens, err := a.redis.SMembers(ctx, setKey).Result()
+	if err != nil {
+		return err
+	}
+
+	if len(tokens) == 0 {
+		return nil
+	}
+
+	pipeline := a.redis.Pipeline()
+	for _, token := range tokens {
+		pipeline.Del(ctx, fmt.Sprintf("session:%s", token))
+	}
+	pipeline.Del(ctx, setKey)
+
+	_, err = pipeline.Exec(ctx)
+	return err
 }

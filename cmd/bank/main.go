@@ -24,6 +24,7 @@ type config struct {
 	DB_DSN     string
 	JWT_KEY    string
 	REDIS_ADDR string
+	LogTokens  bool // If true, logs full reset tokens (development only)
 }
 
 func main() {
@@ -41,6 +42,7 @@ func main() {
 		DB_DSN:     os.Getenv("DATABASE_URL"),
 		JWT_KEY:    os.Getenv("JWT_SECRET"),
 		REDIS_ADDR: os.Getenv("REDIS_ADDR"),
+		LogTokens:  os.Getenv("LOG_TOKENS") == "true",
 	}
 	if portEnv := os.Getenv("PORT"); portEnv != "" {
 		cfg.Port = ":" + portEnv
@@ -71,11 +73,35 @@ func main() {
 	}
 
 	repo := pg.NewRepo(db)
-	service := service.New(repo)
-	a := api.NewAPI(service, logger, rdb, cfg.JWT_KEY)
+	emailSender := service.NewLogEmailSender(logger, cfg.LogTokens)
+	svc := service.New(repo, emailSender)
+	a := api.NewAPI(svc, logger, rdb, cfg.JWT_KEY)
 	handler := a.Router()
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
 	handler = a.LoggingMiddleware(handler)
+
+	// graceful shutdown on SIGINT/SIGTERM
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+
+	// Background worker for cleaning up expired tokens
+	go func() {
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-ticker.C:
+				count, err := repo.CleanupExpiredPasswordResetTokens(context.Background())
+				if err != nil {
+					logger.Error("failed to cleanup expired tokens", "err", err)
+				} else if count > 0 {
+					logger.Info("cleaned up expired password reset tokens", "count", count)
+				}
+			}
+		}
+	}()
 
 	// http server
 	srv := &http.Server{
@@ -95,9 +121,6 @@ func main() {
 		}
 	}()
 
-	// graceful shutdown on SIGINT/SIGTERM
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
 	<-quit
 	logger.Info("shutting down server...")
 

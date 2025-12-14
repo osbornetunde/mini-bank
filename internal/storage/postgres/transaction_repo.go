@@ -230,7 +230,9 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 		return nil, nil, errors.New("amount must be positive")
 	}
 
-	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{})
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{
+		 Isolation: sql.LevelSerializable,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -405,6 +407,121 @@ func (r *Repo) GetUserByEmail(ctx context.Context, email string) (*core.User, er
 	return &user, nil
 }
 
+func (r *Repo) CreatePasswordResetToken(ctx context.Context, userID int, token string, expiresAt time.Time) error {
+	const ins = `INSERT INTO password_reset_tokens (user_id, token, expires_at) VALUES ($1, $2, $3)`
+	_, err := r.db.ExecContext(ctx, ins, userID, token, expiresAt)
+	return err
+}
+
+func (r *Repo) GetPasswordResetToken(ctx context.Context, token string) (userID int, expiresAt time.Time, usedAt *time.Time, err error) {
+	const q = `SELECT user_id, expires_at, used_at FROM password_reset_tokens WHERE token = $1`
+	var nullUsedAt sql.NullTime
+	err = r.db.QueryRowContext(ctx, q, token).Scan(&userID, &expiresAt, &nullUsedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, time.Time{}, nil, storage.ErrInvalidResetToken
+		}
+		return 0, time.Time{}, nil, err
+	}
+	if nullUsedAt.Valid {
+		usedAt = &nullUsedAt.Time
+	}
+	return userID, expiresAt, usedAt, nil
+}
+
+func (r *Repo) MarkPasswordResetTokenAsUsed(ctx context.Context, tokenHash string) error {
+	const upd = `UPDATE password_reset_tokens SET used_at = $1 WHERE token = $2`
+	_, err := r.db.ExecContext(ctx, upd, time.Now().UTC(), tokenHash)
+	return err
+}
+
+func (r *Repo) InvalidateUserPasswordResetTokens(ctx context.Context, userID int) error {
+	const upd = `UPDATE password_reset_tokens SET used_at = $1 WHERE user_id = $2 AND used_at IS NULL`
+	_, err := r.db.ExecContext(ctx, upd, time.Now().UTC(), userID)
+	return err
+}
+
+func (r *Repo) CleanupExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	const del = `DELETE FROM password_reset_tokens WHERE expires_at < $1 OR used_at IS NOT NULL`
+	result, err := r.db.ExecContext(ctx, del, time.Now().UTC().Add(-24*time.Hour))
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (r *Repo) ResetPasswordTx(ctx context.Context, tokenHash string, hashedPassword string) (int, error) {
+	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{})
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	const q = `SELECT user_id, expires_at, used_at FROM password_reset_tokens WHERE token = $1 FOR UPDATE`
+	var userID int
+	var expiresAt time.Time
+	var nullUsedAt sql.NullTime
+
+	err = tx.QueryRowContext(ctx, q, tokenHash).Scan(&userID, &expiresAt, &nullUsedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, storage.ErrInvalidResetToken
+		}
+		return 0, err
+	}
+	
+	if nullUsedAt.Valid {
+		return 0, storage.ErrInvalidResetToken
+	}
+
+	if time.Now().After(expiresAt) {
+		return 0, storage.ErrInvalidResetToken
+	}
+
+	const updPassword = `UPDATE users SET password = $1 WHERE id = $2`
+	result, err := tx.ExecContext(ctx, updPassword, hashedPassword, userID)
+	if err != nil {
+		return 0, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if rowsAffected == 0 {
+		return 0, storage.ErrUserNotFound
+	}
+
+	const updToken = `UPDATE password_reset_tokens SET used_at = $1 WHERE token = $2`
+	if _, err := tx.ExecContext(ctx, updToken, time.Now().UTC(), tokenHash); err != nil {
+		return 0, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+
+	return userID, nil
+}
+
+func (r *Repo) UpdateUserPassword(ctx context.Context, userID int, hashedPassword string) error {
+	const upd = `UPDATE users SET password = $1 WHERE id = $2`
+	result, err := r.db.ExecContext(ctx, upd, hashedPassword, userID)
+	if err != nil {
+		return err
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+
+	if rowsAffected == 0 {
+		return storage.ErrUserNotFound
+	}
+
+	return nil
+}
+
 // Helpers
 func nullIfEmpty(s string) any {
 	if s == "" {
@@ -419,5 +536,3 @@ func nullInt(p *int) any {
 	}
 	return *p
 }
-
-

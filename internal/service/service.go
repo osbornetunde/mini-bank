@@ -2,11 +2,15 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"time"
 
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -24,14 +28,17 @@ type Service interface {
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
 	Login(ctx context.Context, email string, password string) (*core.User, error)
+	RequestPasswordReset(ctx context.Context, email string) (token string, err error)
+	ResetPassword(ctx context.Context, token string, newPassword string) (*core.User, error)
 }
 
 type service struct {
-	store storage.Storage
+	store       storage.Storage
+	emailSender EmailSender
 }
 
-func New(store storage.Storage) Service {
-	return &service{store: store}
+func New(store storage.Storage, emailSender EmailSender) Service {
+	return &service{store: store, emailSender: emailSender}
 }
 
 func (s *service) CreateAccount(ctx context.Context, userID int, balance int64) (*core.Account, error) {
@@ -120,4 +127,77 @@ func hashPassword(password string) (string, error) {
 
 func verifyPassword(hashedPassword string, password string) error {
 	return bcrypt.CompareHashAndPassword([]byte(hashedPassword), []byte(password))
+}
+
+func hashToken(token string) string {
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:])
+}
+
+func (s *service) RequestPasswordReset(ctx context.Context, email string) (string, error) {
+	user, err := s.store.GetUserByEmail(ctx, email)
+	if err != nil {
+		// Don't reveal whether the user exists or not for security reasons
+		if errors.Is(err, storage.ErrUserNotFound) {
+			// Simulate DB work to mitigate timing attacks
+			// In a real production system, you'd want to tune this to match the "found" path
+			// which includes a token generation and DB insert.
+			time.Sleep(50 * time.Millisecond)
+
+			// Still return success to avoid user enumeration
+			return "", nil
+		}
+		return "", err
+	}
+
+	if err := s.store.InvalidateUserPasswordResetTokens(ctx, user.ID); err != nil {
+		return "", err
+	}
+
+	token := uuid.NewString()
+
+	tokenHash := hashToken(token)
+
+	expiresAt := time.Now().Add(1 * time.Hour)
+
+	if err := s.store.CreatePasswordResetToken(ctx, user.ID, tokenHash, expiresAt); err != nil {
+		return "", err
+	}
+
+	// Send email with token
+	if err := s.emailSender.SendPasswordResetEmail(email, token); err != nil {
+		// Clean up the orphaned token since user won't receive it
+		_ = s.store.InvalidateUserPasswordResetTokens(ctx, user.ID)
+		return "", err
+	}
+
+	return token, nil
+}
+
+func (s *service) ResetPassword(ctx context.Context, token string, newPassword string) (*core.User, error) {
+	tokenHash := hashToken(token)
+
+	hashedPassword, err := hashPassword(newPassword)
+	if err != nil {
+		return nil, err
+	}
+
+	userID, err := s.store.ResetPasswordTx(ctx, tokenHash, hashedPassword)
+	if err != nil {
+		return nil, err
+	}
+
+	user, err := s.store.GetUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Send confirmation email
+	if err := s.emailSender.SendPasswordChangedEmail(user.Email); err != nil {
+		// Log error but don't fail the request
+		// We can't log here directly as we don't have a logger, but in a real system we would.
+		// For now we just ignore it as it's non-critical path
+	}
+
+	return user, nil
 }

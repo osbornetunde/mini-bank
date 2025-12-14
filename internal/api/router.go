@@ -1,6 +1,9 @@
 package api
 
-import "net/http"
+import (
+	"net/http"
+	"time"
+)
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
@@ -26,6 +29,10 @@ func (a *API) Router() http.Handler {
 	// Authentication routes
 	mux.HandleFunc("POST /api/v1/login", a.LoginHandler)
 	mux.HandleFunc("POST /api/v1/refresh", a.AuthMiddleware(a.RefreshTokenHandler))
+
+	// Password reset routes
+	mux.HandleFunc("POST /api/v1/password-reset/request", a.RateLimitMiddleware(a.RequestPasswordResetHandler, 5, time.Hour))
+	mux.HandleFunc("POST /api/v1/password-reset/confirm", a.RateLimitMiddleware(a.ResetPasswordHandler, 5, time.Hour))
 
 	return mux
 }

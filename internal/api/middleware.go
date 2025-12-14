@@ -132,3 +132,35 @@ func (a *API) AuthenticationMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		next.ServeHTTP(w, r)
 	}
 }
+
+func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.Duration) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		ip := r.RemoteAddr
+		// Simple IP extraction, might need to handle X-Forwarded-For in prod
+		// but RemoteAddr contains port, so strip it
+		if idx := strings.LastIndex(ip, ":"); idx != -1 {
+			ip = ip[:idx]
+		}
+		
+		key := fmt.Sprintf("ratelimit:%s:%s", r.URL.Path, ip)
+		
+		val, err := a.redis.Incr(r.Context(), key).Result()
+		if err != nil {
+			a.logger.Error("rate limit error", "err", err)
+			// Fail open
+			next.ServeHTTP(w, r)
+			return
+		}
+		
+		if val == 1 {
+			a.redis.Expire(r.Context(), key, window)
+		}
+		
+		if val > int64(limit) {
+			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			return
+		}
+		
+		next.ServeHTTP(w, r)
+	}
+}
