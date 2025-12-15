@@ -1,10 +1,14 @@
 package service
 
 import (
+	"fmt"
 	"log/slog"
-
-	"mini-bank/internal/mailer"
 )
+
+// MailSender defines the interface for sending emails
+type MailSender interface {
+	Send(subject, body string, to []string) error
+}
 
 type EmailSender interface {
 	SendPasswordResetEmail(email, token string) error
@@ -14,10 +18,10 @@ type EmailSender interface {
 type LogEmailSender struct {
 	logger   *slog.Logger
 	logToken bool // If true, logs full token (development only)
-	mailer   mailer.Mailer
+	mailer   MailSender
 }
 
-func NewLogEmailSender(logger *slog.Logger, logToken bool, mailer mailer.Mailer) *LogEmailSender {
+func NewLogEmailSender(logger *slog.Logger, logToken bool, mailer MailSender) *LogEmailSender {
 	return &LogEmailSender{logger: logger, logToken: logToken, mailer: mailer}
 }
 
@@ -34,15 +38,14 @@ func (s *LogEmailSender) SendPasswordResetEmail(email, token string) error {
 		"token", tokenValue,
 		"subject", "Password Reset Request",
 	)
-	body := `<html>
+	body := fmt.Sprintf(`<html>
             <body>
                 <h1>Password Reset Request</h1>
-                <p><b>Hello!</b> This is your password reset token: <code>${token}</code>.</p>
+                <p><b>Hello!</b> This is your password reset token: <code>%s</code>.</p>
                 <p>Thanks,<br>Minibank</p>
             </body>
-        </html>`
-	s.mailer.Send("Password Reset Request", body, []string{email})
-	return nil
+        </html>`, token)
+	return s.mailer.Send("Password Reset Request", body, []string{email})
 }
 
 func (s *LogEmailSender) SendPasswordChangedEmail(email string) error {
@@ -57,6 +60,5 @@ func (s *LogEmailSender) SendPasswordChangedEmail(email string) error {
                 <p>Thanks,<br>Minibank</p>
             </body>
         </html>`
-	s.mailer.Send("Password Reset Request", body, []string{email})
-	return nil
+	return s.mailer.Send("Your password has been changed", body, []string{email})
 }

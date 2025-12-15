@@ -1,28 +1,36 @@
 package mailer
 
 import (
-	"strconv"
 	"time"
 
 	gomail "gopkg.in/mail.v2"
 )
 
 type Mailer struct {
-	dailer *gomail.Dialer
+	dialer *gomail.Dialer
 	sender string
 }
 
-func New(host string, port string, username, password, sender string) Mailer {
-	intPort, err := strconv.Atoi(port)
-	if err != nil {
-		panic(err)
+type Config struct {
+	Host     string
+	Port     int
+	Username string
+	Password string
+	Sender   string
+	Timeout  time.Duration
+}
+
+func New(cfg Config) Mailer {
+	dialer := gomail.NewDialer(cfg.Host, cfg.Port, cfg.Username, cfg.Password)
+	timeout := cfg.Timeout
+	if timeout == 0 {
+		timeout = 10 * time.Second
 	}
-	dailer := gomail.NewDialer(host, intPort, username, password)
-	dailer.Timeout = time.Second * 10
+	dialer.Timeout = timeout
 
 	return Mailer{
-		dailer: dailer,
-		sender: sender,
+		dialer: dialer,
+		sender: cfg.Sender,
 	}
 }
 
@@ -33,5 +41,5 @@ func (m Mailer) Send(subject, body string, to []string) error {
 	msg.SetHeader("Subject", subject)
 	msg.SetBody("text/html", body)
 
-	return m.dailer.DialAndSend(msg)
+	return m.dialer.DialAndSend(msg)
 }
