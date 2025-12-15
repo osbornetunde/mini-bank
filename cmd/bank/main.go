@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"mini-bank/internal/api"
+	"mini-bank/internal/mailer"
 	"mini-bank/internal/service"
 	pg "mini-bank/internal/storage/postgres"
 
@@ -20,11 +21,16 @@ import (
 
 // config holds the application configuration.
 type config struct {
-	Port       string
-	DB_DSN     string
-	JWT_KEY    string
-	REDIS_ADDR string
-	LogTokens  bool // If true, logs full reset tokens (development only)
+	Port        string
+	DB_DSN      string
+	JWT_KEY     string
+	REDIS_ADDR  string
+	LogTokens   bool // If true, logs full reset tokens (development only)
+	SMTP_HOST   string
+	SMTP_PORT   string
+	SMTP_USER   string
+	SMTP_PASS   string
+	SMTP_SENDER string
 }
 
 func main() {
@@ -38,11 +44,16 @@ func main() {
 
 	// Load configuration
 	cfg := config{
-		Port:       ":8080", // Default port
-		DB_DSN:     os.Getenv("DATABASE_URL"),
-		JWT_KEY:    os.Getenv("JWT_SECRET"),
-		REDIS_ADDR: os.Getenv("REDIS_ADDR"),
-		LogTokens:  os.Getenv("LOG_TOKENS") == "true",
+		Port:        ":8080", // Default port
+		DB_DSN:      os.Getenv("DATABASE_URL"),
+		JWT_KEY:     os.Getenv("JWT_SECRET"),
+		REDIS_ADDR:  os.Getenv("REDIS_ADDR"),
+		LogTokens:   os.Getenv("LOG_TOKENS") == "true",
+		SMTP_HOST:   os.Getenv("SMTP_HOST"),
+		SMTP_PORT:   os.Getenv("SMTP_PORT"),
+		SMTP_USER:   os.Getenv("SMTP_USERNAME"),
+		SMTP_PASS:   os.Getenv("SMTP_PASSWORD"),
+		SMTP_SENDER: os.Getenv("SMTP_SENDER"),
 	}
 	if portEnv := os.Getenv("PORT"); portEnv != "" {
 		cfg.Port = ":" + portEnv
@@ -72,8 +83,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	mailer := mailer.New(cfg.SMTP_HOST, cfg.SMTP_PORT, cfg.SMTP_USER, cfg.SMTP_PASS, cfg.SMTP_SENDER)
+
 	repo := pg.NewRepo(db)
-	emailSender := service.NewLogEmailSender(logger, cfg.LogTokens)
+	emailSender := service.NewLogEmailSender(logger, cfg.LogTokens, mailer)
 	svc := service.New(repo, emailSender)
 	a := api.NewAPI(svc, logger, rdb, cfg.JWT_KEY)
 	handler := a.Router()
