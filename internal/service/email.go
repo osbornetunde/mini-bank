@@ -1,64 +1,65 @@
 package service
 
 import (
-	"fmt"
 	"log/slog"
+	"mini-bank/internal/templates"
+	"mini-bank/internal/worker"
 )
 
-// MailSender defines the interface for sending emails
-type MailSender interface {
-	Send(subject, body string, to []string) error
-}
-
+// EmailSender interface remains the same
 type EmailSender interface {
 	SendPasswordResetEmail(email, token string) error
 	SendPasswordChangedEmail(email string) error
 }
 
-type LogEmailSender struct {
-	logger   *slog.Logger
-	logToken bool // If true, logs full token (development only)
-	mailer   MailSender
+type AsyncEmailSender struct {
+	logger      *slog.Logger
+	logToken    bool
+	distributor worker.TaskDistributor
 }
 
-func NewLogEmailSender(logger *slog.Logger, logToken bool, mailer MailSender) *LogEmailSender {
-	return &LogEmailSender{logger: logger, logToken: logToken, mailer: mailer}
+func NewAsyncEmailSender(logger *slog.Logger, logToken bool, distributor worker.TaskDistributor) *AsyncEmailSender {
+	return &AsyncEmailSender{
+		logger:      logger,
+		logToken:    logToken,
+		distributor: distributor,
+	}
 }
 
-func (s *LogEmailSender) SendPasswordResetEmail(email, token string) error {
-	// In a real application, this would send an actual email.
+func (s *AsyncEmailSender) SendPasswordResetEmail(email, token string) error {
+	subject, body, err := templates.GetPasswordResetContent(token)
+	if err != nil {
+		return err
+	}
+
 	tokenValue := token[:8] + "..." + token[len(token)-4:]
 	if s.logToken {
-		// WARNING: Only enable in development! Never log tokens in production.
 		tokenValue = token
 	}
 
-	s.logger.Info("sending password reset email",
+	s.logger.Info("enqueueing password reset email",
 		"to", email,
 		"token", tokenValue,
-		"subject", "Password Reset Request",
 	)
-	body := fmt.Sprintf(`<html>
-            <body>
-                <h1>Password Reset Request</h1>
-                <p><b>Hello!</b> This is your password reset token: <code>%s</code>.</p>
-                <p>Thanks,<br>Minibank</p>
-            </body>
-        </html>`, token)
-	return s.mailer.Send("Password Reset Request", body, []string{email})
+
+	return s.distributor.DistributeTaskSendEmail(&worker.PayloadSendEmail{
+		Email:   email,
+		Subject: subject,
+		Body:    body,
+	})
 }
 
-func (s *LogEmailSender) SendPasswordChangedEmail(email string) error {
-	s.logger.Info("sending password changed email",
-		"to", email,
-		"subject", "Your password has been changed",
-	)
-	body := `<html>
-            <body>
-                <h1>Password Changed!</h1>
-                <p><b>Hello!</b> Your password has been changed.</p>
-                <p>Thanks,<br>Minibank</p>
-            </body>
-        </html>`
-	return s.mailer.Send("Your password has been changed", body, []string{email})
+func (s *AsyncEmailSender) SendPasswordChangedEmail(email string) error {
+	subject, body, err := templates.GetPasswordChangedContent()
+	if err != nil {
+		return err
+	}
+
+	s.logger.Info("enqueueing password changed email", "to", email)
+
+	return s.distributor.DistributeTaskSendEmail(&worker.PayloadSendEmail{
+		Email:   email,
+		Subject: subject,
+		Body:    body,
+	})
 }

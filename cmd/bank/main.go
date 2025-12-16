@@ -15,7 +15,9 @@ import (
 	"mini-bank/internal/mailer"
 	"mini-bank/internal/service"
 	pg "mini-bank/internal/storage/postgres"
+	"mini-bank/internal/worker"
 
+	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
 )
@@ -94,7 +96,19 @@ func main() {
 	})
 
 	repo := pg.NewRepo(db)
-	emailSender := service.NewLogEmailSender(logger, cfg.LogTokens, mailClient)
+
+	redisOpt := asynq.RedisClientOpt{Addr: cfg.REDIS_ADDR}
+	taskDistributor := worker.NewRedisTaskDistributor(redisOpt, logger)
+	emailSender := service.NewAsyncEmailSender(logger, cfg.LogTokens, taskDistributor)
+
+	taskProcessor := worker.NewRedisTaskProcessor(redisOpt, mailClient, logger)
+	go func() {
+		logger.Info("starting worker server")
+		if err := taskProcessor.Start(); err != nil {
+			logger.Error("failed to start worker server", "err", err)
+		}
+	}()
+
 	svc := service.New(repo, emailSender)
 	a := api.NewAPI(svc, logger, rdb, cfg.JWT_KEY)
 	handler := a.Router()
@@ -150,6 +164,15 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error("server shutdown failed", "err", err)
 		os.Exit(1)
+	}
+
+	// Shutdown worker processor
+	logger.Info("shutting down worker server...")
+	taskProcessor.Shutdown()
+
+	// Close task distributor
+	if err := taskDistributor.Close(); err != nil {
+		logger.Error("task distributor close failed", "err", err)
 	}
 
 	// Close the database connection.
