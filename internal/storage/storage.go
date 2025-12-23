@@ -16,6 +16,7 @@ var (
 	ErrDuplicateEmail      = errors.New("duplicate email")
 	ErrInvalidCredentials  = errors.New("invalid credentials")
 	ErrInvalidResetToken   = errors.New("invalid or expired reset token")
+	ErrAccountLocked       = errors.New("account temporarily locked due to multiple failed login attempts")
 )
 
 type PaymentType string
@@ -31,6 +32,7 @@ type Storage interface {
 	GetAccount(ctx context.Context, id int) (*core.Account, error)
 	ListAccounts(ctx context.Context) ([]*core.Account, error)
 	UpdateBalance(ctx context.Context, id int, newBalance int64) error
+	UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit int64) (*core.Account, error)
 
 	RecordTransaction(ctx context.Context, tx *core.Transaction) error
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
@@ -39,6 +41,7 @@ type Storage interface {
 	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)
 	Payment(ctx context.Context, accountID int, amount int64, paymentType PaymentType, reference string) (*core.Account, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
+	CreateUserWithAccount(ctx context.Context, firstName string, lastName string, email string, password string, initialBalance int64) (*core.User, error)
 	GetUsers(ctx context.Context) ([]*core.User, error)
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
@@ -52,4 +55,6 @@ type Storage interface {
 	UpdateUserPassword(ctx context.Context, userID int, hashedPassword string) error
 	CleanupExpiredPasswordResetTokens(ctx context.Context) (int64, error)
 	ResetPasswordTx(ctx context.Context, tokenHash string, hashedPassword string) (userID int, err error)
+
+	CreateAuditLog(ctx context.Context, log *core.AuditLog) error
 }

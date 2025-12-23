@@ -2,10 +2,15 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
+
+	"mini-bank/internal/service"
+	"mini-bank/pkg/metrics"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -32,10 +37,67 @@ type contextKey string
 
 const contextKeyUserID contextKey = "user_id"
 
+// getRealIP extracts the real client IP address from the request.
+// It checks proxy headers (X-Forwarded-For, X-Real-IP) if the application
+// is configured to trust proxies, otherwise falls back to RemoteAddr.
+//
+// When behind a reverse proxy (nginx, AWS ALB, Cloudflare, etc.), the
+// RemoteAddr will be the proxy's IP, not the client's. This function
+// properly extracts the client IP based on standard proxy headers.
+//
+// Security notes:
+// - Only trust proxy headers if trustProxy is true
+// - X-Forwarded-For can contain multiple IPs (client, proxy1, proxy2, ...)
+// - We take the first (leftmost) IP as the original client
+// - Always validate and sanitize the extracted IP
+func getRealIP(r *http.Request, trustProxy bool) string {
+	if trustProxy {
+		// X-Forwarded-For is the standard header set by proxies
+		// Format: "client, proxy1, proxy2"
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Split by comma and take the first (original client) IP
+			ips := strings.Split(xff, ",")
+			if len(ips) > 0 {
+				clientIP := strings.TrimSpace(ips[0])
+				if clientIP != "" {
+					return clientIP
+				}
+			}
+		}
+
+		// X-Real-IP is set by some proxies (nginx, Cloudflare)
+		// This contains only the client IP, not a chain
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
+
+		// CF-Connecting-IP is set by Cloudflare
+		if cfIP := r.Header.Get("CF-Connecting-IP"); cfIP != "" {
+			return strings.TrimSpace(cfIP)
+		}
+	}
+
+	// Fallback to RemoteAddr (direct connection or proxy headers not trusted)
+	// RemoteAddr format is "IP:port", so we need to strip the port
+	ip := r.RemoteAddr
+	if idx := strings.LastIndex(ip, ":"); idx != -1 {
+		ip = ip[:idx]
+	}
+
+	return ip
+}
+
 // LoggingMiddleware logs details about each incoming request.
 func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+
+		ip := getRealIP(r, a.trustProxy)
+		ua := r.UserAgent()
+
+		ctx := context.WithValue(r.Context(), service.ContextKeyIP, ip)
+		ctx = context.WithValue(ctx, service.ContextKeyUserAgent, ua)
+		r = r.WithContext(ctx)
 
 		rr := newResponseRecorder(w)
 
@@ -43,12 +105,17 @@ func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 
 		duration := time.Since(start)
 
+		// Record metrics
+		metrics.HttpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(rr.statusCode)).Inc()
+		metrics.HttpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
+
 		a.logger.Info("processed request",
 			"method", r.Method,
 			"path", r.URL.Path,
 			"duration", duration,
 			"status", rr.statusCode,
-			"user_agent", r.UserAgent(),
+			"user_agent", ua,
+			"ip", ip,
 		)
 	})
 }
@@ -135,13 +202,8 @@ func (a *API) AuthenticationMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		ip := r.RemoteAddr
-		// Simple IP extraction, might need to handle X-Forwarded-For in prod
-		// but RemoteAddr contains port, so strip it
-		if idx := strings.LastIndex(ip, ":"); idx != -1 {
-			ip = ip[:idx]
-		}
-		
+		ip := getRealIP(r, a.trustProxy)
+
 		key := fmt.Sprintf("ratelimit:%s:%s", r.URL.Path, ip)
 		
 		val, err := a.redis.Incr(r.Context(), key).Result()
@@ -163,4 +225,75 @@ func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.
 		
 		next.ServeHTTP(w, r)
 	}
+}
+
+// BasicAuthMiddleware provides HTTP Basic Authentication for an endpoint.
+// This is commonly used for metrics endpoints that need to be accessible by
+// monitoring systems like Prometheus without requiring JWT tokens.
+func BasicAuthMiddleware(username, password string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// If no credentials are configured, deny access
+			if username == "" || password == "" {
+				http.Error(w, "Metrics authentication not configured", http.StatusServiceUnavailable)
+				return
+			}
+
+			// Get credentials from request
+			user, pass, ok := r.BasicAuth()
+			if !ok {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+				http.Error(w, "Authentication required", http.StatusUnauthorized)
+				return
+			}
+
+			// Use constant-time comparison to prevent timing attacks
+			usernameMatch := subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1
+			passwordMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
+
+			if !usernameMatch || !passwordMatch {
+				w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// SecurityHeadersMiddleware adds security-related HTTP headers to all responses.
+// These headers protect against common web vulnerabilities like clickjacking,
+// MIME sniffing, and XSS attacks.
+func SecurityHeadersMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Prevent clickjacking attacks by restricting who can embed this page in iframes
+		// DENY = no one can frame this page
+		w.Header().Set("X-Frame-Options", "DENY")
+
+		// Prevent MIME-sniffing attacks by forcing browsers to respect Content-Type
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+
+		// Enable browser XSS protection (legacy, but still good to have)
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+
+		// Restrict what resources the browser can load (Content Security Policy)
+		// This is a restrictive policy suitable for an API
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'")
+
+		// Enforce HTTPS for future requests (HSTS)
+		// max-age=31536000 = 1 year
+		// includeSubDomains = apply to all subdomains
+		// Note: Only set this if the application is accessed over HTTPS
+		// In production behind HTTPS, uncomment this:
+		// w.Header().Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+
+		// Indicate that the browser should not send referrer information
+		w.Header().Set("Referrer-Policy", "no-referrer")
+
+		// Disable features that aren't needed (Permissions Policy)
+		w.Header().Set("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+
+		next.ServeHTTP(w, r)
+	})
 }

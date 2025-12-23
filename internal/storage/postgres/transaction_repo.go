@@ -26,7 +26,7 @@ func NewRepo(db *DB) *Repo {
 
 // CreateAccount creates a new account
 func (r *Repo) CreateAccount(ctx context.Context, userID int, balance int64) (*core.Account, error) {
-	const q = `INSERT INTO accounts (user_id, balance) VALUES ($1, $2) RETURNING id, user_id, balance, created_at`
+	const q = `INSERT INTO accounts (user_id, balance, overdraft_limit) VALUES ($1, $2, 0) RETURNING id, user_id, balance, overdraft_limit, created_at`
 	row := r.db.QueryRowContext(ctx, q, userID, balance)
 	return scanAccount(row)
 }
@@ -34,7 +34,7 @@ func (r *Repo) CreateAccount(ctx context.Context, userID int, balance int64) (*c
 // Helper to scan account
 func scanAccount(row scanner) (*core.Account, error) {
 	var a core.Account
-	if err := row.Scan(&a.ID, &a.UserID, &a.Balance, &a.CreatedAt); err != nil {
+	if err := row.Scan(&a.ID, &a.UserID, &a.Balance, &a.OverdraftLimit, &a.CreatedAt); err != nil {
 		return nil, err
 	}
 	return &a, nil
@@ -62,7 +62,7 @@ type scanner interface {
 
 // GetAccount retrieves an account by id
 func (r *Repo) GetAccount(ctx context.Context, id int) (*core.Account, error) {
-	const q = `SELECT id, user_id, balance, created_at FROM accounts WHERE id = $1`
+	const q = `SELECT id, user_id, balance, overdraft_limit, created_at FROM accounts WHERE id = $1`
 	row := r.db.QueryRowContext(ctx, q, id)
 	acc, err := scanAccount(row)
 	if err != nil {
@@ -76,7 +76,7 @@ func (r *Repo) GetAccount(ctx context.Context, id int) (*core.Account, error) {
 
 // ListAccounts returns all accounts
 func (r *Repo) ListAccounts(ctx context.Context) ([]*core.Account, error) {
-	const q = `SELECT id, user_id, balance, created_at FROM accounts ORDER BY id`
+	const q = `SELECT id, user_id, balance, overdraft_limit, created_at FROM accounts ORDER BY id`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -107,9 +107,9 @@ func (r *Repo) Deposit(ctx context.Context, accountID int, amount int64, referen
 	defer tx.Rollback()
 
 	// Update balance and return account details
-	const upd = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, created_at`
+	const upd = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var acc core.Account
-	if err := tx.QueryRowContext(ctx, upd, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, upd, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.OverdraftLimit, &acc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, storage.ErrAccountNotFound
 		}
@@ -141,9 +141,9 @@ func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, refere
 	defer tx.Rollback()
 
 	// Attempt to debit if sufficient funds exist; RETURNING gives new account details
-	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id, user_id, balance, created_at`
+	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance + overdraft_limit >= $1 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var acc core.Account
-	if err := tx.QueryRowContext(ctx, debit, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, debit, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.OverdraftLimit, &acc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			// The atomic update failed. Let's find out why.
 			var exists bool
@@ -224,6 +224,20 @@ func (r *Repo) UpdateBalance(ctx context.Context, id int, newBalance int64) erro
 	return err
 }
 
+// UpdateOverdraftLimit updates an account's overdraft limit and returns the updated account.
+func (r *Repo) UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit int64) (*core.Account, error) {
+	const q = `UPDATE accounts SET overdraft_limit = $1 WHERE id = $2 RETURNING id, user_id, balance, overdraft_limit, created_at`
+	row := r.db.QueryRowContext(ctx, q, newLimit, accountID)
+	acc, err := scanAccount(row)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, storage.ErrAccountNotFound
+		}
+		return nil, err
+	}
+	return acc, nil
+}
+
 // Transfer performs a transactional transfer between two accounts.
 func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
 	if amount <= 0 {
@@ -231,7 +245,7 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 	}
 
 	tx, err := r.db.BeginTx(ctx, &sql.TxOptions{
-		 Isolation: sql.LevelSerializable,
+		Isolation: sql.LevelSerializable,
 	})
 	if err != nil {
 		return nil, nil, err
@@ -239,9 +253,9 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 	defer tx.Rollback()
 
 	// Withdraw from sender
-	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance >= $1 RETURNING id, user_id, balance, created_at`
+	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance + overdraft_limit >= $1 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var fromAcc core.Account
-	if err := tx.QueryRowContext(ctx, debit, amount, fromID).Scan(&fromAcc.ID, &fromAcc.UserID, &fromAcc.Balance, &fromAcc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, debit, amount, fromID).Scan(&fromAcc.ID, &fromAcc.UserID, &fromAcc.Balance, &fromAcc.OverdraftLimit, &fromAcc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			// This could mean insufficient funds or the account doesn't exist.
 			// A more robust implementation could check for existence first.
@@ -251,9 +265,9 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 	}
 
 	// Deposit to receiver
-	const credit = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, created_at`
+	const credit = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var toAcc core.Account
-	if err := tx.QueryRowContext(ctx, credit, amount, toID).Scan(&toAcc.ID, &toAcc.UserID, &toAcc.Balance, &toAcc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, credit, amount, toID).Scan(&toAcc.ID, &toAcc.UserID, &toAcc.Balance, &toAcc.OverdraftLimit, &toAcc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil, storage.ErrAccountNotFound
 		}
@@ -328,8 +342,46 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 	return &core.User{ID: id, FirstName: firstName, LastName: lastName, Email: email}, nil
 }
 
+func (r *Repo) CreateUserWithAccount(ctx context.Context, firstName string, lastName string, email string, password string, initialBalance int64) (*core.User, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	const insUser = `INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id`
+	var userID int
+	if err := tx.QueryRowContext(ctx, insUser, firstName, lastName, email, password).Scan(&userID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+			return nil, storage.ErrDuplicateEmail
+		}
+		return nil, fmt.Errorf("failed to create user: %w", err)
+	}
+
+	const insAccount = `INSERT INTO accounts (user_id, balance, overdraft_limit) VALUES ($1, $2, 0) RETURNING id, balance, overdraft_limit`
+	var accID int
+	var balance int64
+	var odLimit int64
+	if err := tx.QueryRowContext(ctx, insAccount, userID, initialBalance).Scan(&accID, &balance, &odLimit); err != nil {
+		return nil, fmt.Errorf("failed to create account for user: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+
+	return &core.User{
+		ID:        userID,
+		FirstName: firstName,
+		LastName:  lastName,
+		Email:     email,
+		Balance:   &balance,
+	}, nil
+}
+
 func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
-	q := `SELECT id, email, first_name, last_name FROM users`
+	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance FROM users u INNER JOIN accounts a ON u.id = a.user_id ORDER BY u.id`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -338,13 +390,13 @@ func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
 	var users []*core.User
 
 	for rows.Next() {
-		var user core.User
-		if err := rows.Scan(&user.ID, &user.Email, &user.FirstName, &user.LastName); err != nil {
+		user, err := scanUser(rows)
+		if err != nil {
 			return nil, err
 		}
-		users = append(users, &user)
+		users = append(users, user)
 	}
-	return users, nil
+	return users, rows.Err()
 }
 
 func (r *Repo) GetUser(ctx context.Context, userId int) (*core.User, error) {
@@ -469,7 +521,7 @@ func (r *Repo) ResetPasswordTx(ctx context.Context, tokenHash string, hashedPass
 		}
 		return 0, err
 	}
-	
+
 	if nullUsedAt.Valid {
 		return 0, storage.ErrInvalidResetToken
 	}
@@ -520,6 +572,12 @@ func (r *Repo) UpdateUserPassword(ctx context.Context, userID int, hashedPasswor
 	}
 
 	return nil
+}
+
+func (r *Repo) CreateAuditLog(ctx context.Context, log *core.AuditLog) error {
+	const q = `INSERT INTO audit_logs (user_id, action, metadata, ip, user_agent, created_at) VALUES ($1, $2, $3, $4, $5, $6)`
+	_, err := r.db.ExecContext(ctx, q, nullInt(&log.UserID), log.Action, nullIfEmpty(log.Metadata), nullIfEmpty(log.IP), nullIfEmpty(log.UserAgent), log.CreatedAt)
+	return err
 }
 
 // Helpers

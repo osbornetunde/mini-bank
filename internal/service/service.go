@@ -5,19 +5,31 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"log/slog"
 	"time"
 
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
+	"mini-bank/pkg/metrics"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
+)
+
+type contextKey string
+
+const (
+	ContextKeyIP        contextKey = "ip"
+	ContextKeyUserAgent contextKey = "user_agent"
 )
 
 type Service interface {
 	CreateAccount(ctx context.Context, userID int, balance int64) (*core.Account, error)
 	GetAccount(ctx context.Context, id int) (*core.Account, error)
 	ListAccounts(ctx context.Context) ([]*core.Account, error)
+	ListUserAccounts(ctx context.Context, userID int) ([]*core.Account, error)
+	UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit int64) (*core.Account, error)
 	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)
 	Payment(ctx context.Context, accountID int, amount int64, pType storage.PaymentType, reference string) (*core.Account, error)
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
@@ -35,10 +47,43 @@ type Service interface {
 type service struct {
 	store       storage.Storage
 	emailSender EmailSender
+	logger      *slog.Logger
 }
 
-func New(store storage.Storage, emailSender EmailSender) Service {
-	return &service{store: store, emailSender: emailSender}
+func New(store storage.Storage, emailSender EmailSender, logger *slog.Logger) Service {
+	return &service{
+		store:       store,
+		emailSender: emailSender,
+		logger:      logger,
+	}
+}
+
+func (s *service) logActivity(ctx context.Context, userID int, action string, metadata string) error {
+	ip, _ := ctx.Value(ContextKeyIP).(string)
+	ua, _ := ctx.Value(ContextKeyUserAgent).(string)
+
+	log := &core.AuditLog{
+		UserID:    userID,
+		Action:    action,
+		Metadata:  metadata,
+		IP:        ip,
+		UserAgent: ua,
+		CreatedAt: time.Now().UTC(),
+	}
+
+	if err := s.store.CreateAuditLog(ctx, log); err != nil {
+		// Log the error - audit log failures are a security concern
+		s.logger.Error("failed to create audit log",
+			"error", err,
+			"user_id", userID,
+			"action", action,
+			"ip", ip,
+		)
+		// Increment failure metric for monitoring/alerting
+		metrics.AuditLogFailures.WithLabelValues(action).Inc()
+		return err
+	}
+	return nil
 }
 
 func (s *service) CreateAccount(ctx context.Context, userID int, balance int64) (*core.Account, error) {
@@ -53,12 +98,48 @@ func (s *service) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 	return s.store.ListAccounts(ctx)
 }
 
+func (s *service) ListUserAccounts(ctx context.Context, userID int) ([]*core.Account, error) {
+	all, err := s.store.ListAccounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var filtered []*core.Account
+	for _, acc := range all {
+		if acc.UserID == userID {
+			filtered = append(filtered, acc)
+		}
+	}
+	return filtered, nil
+}
+
+func (s *service) UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit int64) (*core.Account, error) {
+	return s.store.UpdateOverdraftLimit(ctx, accountID, newLimit)
+}
+
 func (s *service) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
-	return s.store.Transfer(ctx, fromID, toID, amount, reference)
+	from, to, err := s.store.Transfer(ctx, fromID, toID, amount, reference)
+	status := "success"
+	if err != nil {
+		status = "failure"
+	}
+	metrics.TransactionTotal.WithLabelValues("transfer", status).Inc()
+	if err == nil {
+		metrics.TransactionAmount.WithLabelValues("transfer").Add(float64(amount))
+	}
+	return from, to, err
 }
 
 func (s *service) Payment(ctx context.Context, accountID int, amount int64, pType storage.PaymentType, reference string) (*core.Account, error) {
-	return s.store.Payment(ctx, accountID, amount, pType, reference)
+	acc, err := s.store.Payment(ctx, accountID, amount, pType, reference)
+	status := "success"
+	if err != nil {
+		status = "failure"
+	}
+	metrics.TransactionTotal.WithLabelValues(string(pType), status).Inc()
+	if err == nil {
+		metrics.TransactionAmount.WithLabelValues(string(pType)).Add(float64(amount))
+	}
+	return acc, err
 }
 
 func (s *service) ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error) {
@@ -74,14 +155,15 @@ func (s *service) CreateUser(ctx context.Context, firstName string, lastName str
 	if err != nil {
 		return nil, err
 	}
-	res, err := s.store.CreateUser(ctx, firstName, lastName, email, hashedPassword)
-	if err != nil {
-		return nil, err
+	res, err := s.store.CreateUserWithAccount(ctx, firstName, lastName, email, hashedPassword, 0)
+	if err == nil && res != nil {
+		if logErr := s.logActivity(ctx, res.ID, "user_created", fmt.Sprintf("email: %s", email)); logErr != nil {
+			// User is created but audit failed. We return the error but also the user.
+			// The caller can decide how to handle this partial success.
+			return res, fmt.Errorf("user created but audit log failed: %w", logErr)
+		}
 	}
-	if _, err := s.store.CreateAccount(ctx, res.ID, 0); err != nil {
-		return nil, err
-	}
-	return res, nil
+	return res, err
 }
 
 func (s *service) GetUsers(ctx context.Context) ([]*core.User, error) {
@@ -111,9 +193,13 @@ func (s *service) Login(ctx context.Context, email string, password string) (*co
 	}
 
 	if err := verifyPassword(*user.Password, password); err != nil {
+		_ = s.logActivity(ctx, user.ID, "login_failed", "invalid password")
 		return nil, storage.ErrInvalidCredentials
 	}
 
+	if err := s.logActivity(ctx, user.ID, "login_success", ""); err != nil {
+		return nil, fmt.Errorf("audit log failed: %w", err)
+	}
 	return user, nil
 }
 
@@ -171,6 +257,12 @@ func (s *service) RequestPasswordReset(ctx context.Context, email string) (strin
 		return "", err
 	}
 
+	if err := s.logActivity(ctx, user.ID, "password_reset_requested", ""); err != nil {
+		// If audit fails, we should probably fail the request to ensure traceability
+		// However, email is already sent. This is tricky.
+		// For fail-closed, we return error.
+		return "", fmt.Errorf("audit log failed: %w", err)
+	}
 	return token, nil
 }
 
@@ -199,5 +291,8 @@ func (s *service) ResetPassword(ctx context.Context, token string, newPassword s
 		// For now we just ignore it as it's non-critical path
 	}
 
+	if err := s.logActivity(ctx, user.ID, "password_reset_success", ""); err != nil {
+		return user, fmt.Errorf("password reset successful but audit log failed: %w", err)
+	}
 	return user, nil
 }

@@ -14,18 +14,28 @@ type Validator interface {
 	Validate() error
 }
 
+// Transaction amount limits (in cents)
+// These limits help prevent fraud, money laundering, and fat-finger errors
+const (
+	maxTransferAmount  = 1_000_000_00 // $1,000,000 per transfer
+	maxDepositAmount   = 1_000_000_00 // $1,000,000 per deposit
+	maxWithdrawAmount  = 100_000_00   // $100,000 per withdrawal
+	maxOverdraftLimit  = 10_000_000   // $100,000 overdraft limit
+)
+
 // Common validation errors
 var (
-	ErrInvalidEmail     = errors.New("invalid email format")
-	ErrPasswordTooShort = errors.New("password must be at least 8 characters")
-	ErrPasswordTooLong  = errors.New("password must not exceed 128 characters")
-	ErrPasswordTooWeak  = errors.New("password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character")
-	ErrInvalidAmount    = errors.New("amount must be greater than zero")
-	ErrInvalidID        = errors.New("invalid ID")
-	ErrSameAccount      = errors.New("source and destination accounts cannot be the same")
-	ErrMissingField     = errors.New("missing required field")
-	ErrInvalidPayment   = errors.New("invalid payment type")
-	ErrInvalidToken     = errors.New("invalid token format")
+	ErrInvalidEmail        = errors.New("invalid email format")
+	ErrPasswordTooShort    = errors.New("password must be at least 8 characters")
+	ErrPasswordTooLong     = errors.New("password must not exceed 128 characters")
+	ErrPasswordTooWeak     = errors.New("password must contain at least one uppercase letter, one lowercase letter, one digit, and one special character")
+	ErrInvalidAmount       = errors.New("amount must be greater than zero")
+	ErrAmountTooLarge      = errors.New("amount exceeds maximum allowed limit")
+	ErrInvalidID           = errors.New("invalid ID")
+	ErrSameAccount         = errors.New("source and destination accounts cannot be the same")
+	ErrMissingField        = errors.New("missing required field")
+	ErrInvalidPayment      = errors.New("invalid payment type")
+	ErrInvalidToken        = errors.New("invalid token format")
 )
 
 // validatePasswordStrength checks if a password meets complexity requirements:
@@ -93,6 +103,9 @@ func (r transferRequest) Validate() error {
 	if r.Amount <= 0 {
 		return ErrInvalidAmount
 	}
+	if r.Amount > maxTransferAmount {
+		return ErrAmountTooLarge
+	}
 	return nil
 }
 
@@ -106,6 +119,15 @@ func (r paymentRequest) Validate() error {
 	if r.Type != storage.Deposit && r.Type != storage.Withdraw {
 		return ErrInvalidPayment
 	}
+
+	// Apply different limits for deposits vs withdrawals
+	if r.Type == storage.Deposit && r.Amount > maxDepositAmount {
+		return ErrAmountTooLarge
+	}
+	if r.Type == storage.Withdraw && r.Amount > maxWithdrawAmount {
+		return ErrAmountTooLarge
+	}
+
 	return nil
 }
 
@@ -145,6 +167,19 @@ func (r ResetPasswordRequest) Validate() error {
 	}
 	if err := validatePasswordStrength(r.NewPassword); err != nil {
 		return err
+	}
+	return nil
+}
+
+func (r updateOverdraftLimitRequest) Validate() error {
+	if r.AccountID <= 0 {
+		return ErrInvalidID
+	}
+	if r.OverdraftLimit < 0 {
+		return errors.New("overdraft limit cannot be negative")
+	}
+	if r.OverdraftLimit > maxOverdraftLimit {
+		return errors.New("overdraft limit exceeds maximum allowed")
 	}
 	return nil
 }

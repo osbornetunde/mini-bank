@@ -3,15 +3,25 @@ package api
 import (
 	"net/http"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
 
+	// Health check endpoint (public)
+	mux.HandleFunc("GET /health", a.HealthCheckHandler)
+
+	// Prometheus metrics endpoint (protected with Basic Auth)
+	metricsHandler := BasicAuthMiddleware(a.metricsUsername, a.metricsPassword)(promhttp.Handler())
+	mux.Handle("GET /metrics", metricsHandler)
+
 	// Account routes
 	mux.HandleFunc("POST /api/v1/accounts", a.AuthMiddleware(a.CreateAccountHandler))
 	mux.HandleFunc("GET /api/v1/accounts", a.AuthMiddleware(a.GetAccountsHandler))
 	mux.HandleFunc("GET /api/v1/accounts/{id}", a.AuthMiddleware(a.GetAccountHandler))
+	mux.HandleFunc("PUT /api/v1/accounts/overdraft", a.AuthMiddleware(a.UpdateOverdraftLimitHandler))
 
 	// Transaction routes
 	mux.HandleFunc("POST /api/v1/transactions/transfer", a.AuthMiddleware(a.TransferHandler))
@@ -28,7 +38,7 @@ func (a *API) Router() http.Handler {
 
 	// Authentication routes
 	mux.HandleFunc("POST /api/v1/login", a.LoginHandler)
-	mux.HandleFunc("POST /api/v1/refresh", a.AuthMiddleware(a.RefreshTokenHandler))
+	mux.HandleFunc("POST /api/v1/refresh", a.RefreshTokenHandler)
 
 	// Password reset routes
 	mux.HandleFunc("POST /api/v1/password-reset/request", a.RateLimitMiddleware(a.RequestPasswordResetHandler, 5, time.Hour))

@@ -45,7 +45,7 @@ func (s *Store) CreateAccount(ctx context.Context, userID int, initialBalance in
 	defer s.mu.Unlock()
 
 	s.nextID++
-	acc := &core.Account{ID: s.nextID, UserID: userID, Balance: initialBalance}
+	acc := &core.Account{ID: s.nextID, UserID: userID, Balance: initialBalance, OverdraftLimit: 0}
 	s.accounts[acc.ID] = acc
 
 	s.locksMu.Lock()
@@ -98,6 +98,26 @@ func (s *Store) UpdateBalance(ctx context.Context, id int, delta int64) error {
 
 	acc.Balance += delta
 	return nil
+}
+
+// UpdateOverdraftLimit updates an account's overdraft limit.
+func (s *Store) UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit int64) (*core.Account, error) {
+	s.mu.RLock()
+	acc, exists := s.accounts[accountID]
+	s.mu.RUnlock()
+
+	if !exists {
+		return nil, storage.ErrAccountNotFound
+	}
+
+	al := s.getAccountLock(accountID)
+	al.Lock()
+	defer al.Unlock()
+
+	acc.OverdraftLimit = newLimit
+
+	accountCopy := *acc
+	return &accountCopy, nil
 }
 
 // RecordTransaction stores a transaction in memory.
@@ -169,7 +189,7 @@ func (s *Store) Transfer(ctx context.Context, fromID, toID int, amount int64, re
 		return nil, nil, storage.ErrAccountNotFound
 	}
 
-	if fromAcc.Balance < amount {
+	if fromAcc.Balance+fromAcc.OverdraftLimit < amount {
 		return nil, nil, storage.ErrInsufficientFunds
 	}
 
@@ -224,7 +244,7 @@ func (s *Store) Payment(ctx context.Context, accountID int, amount int64, paymen
 	accountLock.Lock()
 	defer accountLock.Unlock()
 
-	if account.Balance < amount && paymentType == storage.Withdraw {
+	if account.Balance+account.OverdraftLimit < amount && paymentType == storage.Withdraw {
 		return nil, storage.ErrInsufficientFunds
 	}
 
@@ -251,4 +271,66 @@ func (s *Store) Payment(ctx context.Context, accountID int, amount int64, paymen
 
 	accountCopy := *account
 	return &accountCopy, nil
+}
+
+// User and Password related methods (Stubs for now to satisfy interface)
+
+func (s *Store) CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) CreateUserWithAccount(ctx context.Context, firstName string, lastName string, email string, password string, initialBalance int64) (*core.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) GetUsers(ctx context.Context) ([]*core.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) GetUser(ctx context.Context, id int) (*core.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) DeleteUser(ctx context.Context, id int) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *Store) GetUserByEmail(ctx context.Context, email string) (*core.User, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) CreatePasswordResetToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *Store) GetPasswordResetToken(ctx context.Context, tokenHash string) (userID int, expiresAt time.Time, usedAt *time.Time, err error) {
+	return 0, time.Time{}, nil, fmt.Errorf("not implemented")
+}
+
+func (s *Store) MarkPasswordResetTokenAsUsed(ctx context.Context, tokenHash string) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *Store) InvalidateUserPasswordResetTokens(ctx context.Context, userID int) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *Store) UpdateUserPassword(ctx context.Context, userID int, hashedPassword string) error {
+	return fmt.Errorf("not implemented")
+}
+
+func (s *Store) CleanupExpiredPasswordResetTokens(ctx context.Context) (int64, error) {
+	return 0, fmt.Errorf("not implemented")
+}
+
+func (s *Store) ResetPasswordTx(ctx context.Context, tokenHash string, hashedPassword string) (userID int, err error) {
+	return 0, fmt.Errorf("not implemented")
+}
+
+func (s *Store) CreateAuditLog(ctx context.Context, log *core.AuditLog) error {
+	return fmt.Errorf("not implemented")
 }

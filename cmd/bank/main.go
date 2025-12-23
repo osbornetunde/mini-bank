@@ -24,16 +24,19 @@ import (
 
 // config holds the application configuration.
 type config struct {
-	Port        string
-	DB_DSN      string
-	JWT_KEY     string
-	REDIS_ADDR  string
-	LogTokens   bool // If true, logs full reset tokens (development only)
-	SMTP_HOST   string
-	SMTP_PORT   int
-	SMTP_USER   string
-	SMTP_PASS   string
-	SMTP_SENDER string
+	Port            string
+	DB_DSN          string
+	JWT_KEY         string
+	REDIS_ADDR      string
+	LogTokens       bool // If true, logs full reset tokens (development only)
+	SMTP_HOST       string
+	SMTP_PORT       int
+	SMTP_USER       string
+	SMTP_PASS       string
+	SMTP_SENDER     string
+	METRICS_USER    string
+	METRICS_PASS    string
+	TRUST_PROXY     bool // If true, trust X-Forwarded-For headers (for proxies/load balancers)
 }
 
 func main() {
@@ -48,16 +51,19 @@ func main() {
 	// Load configuration
 	smtpPort, _ := strconv.Atoi(os.Getenv("SMTP_PORT"))
 	cfg := config{
-		Port:        ":8080", // Default port
-		DB_DSN:      os.Getenv("DATABASE_URL"),
-		JWT_KEY:     os.Getenv("JWT_SECRET"),
-		REDIS_ADDR:  os.Getenv("REDIS_ADDR"),
-		LogTokens:   os.Getenv("LOG_TOKENS") == "true",
-		SMTP_HOST:   os.Getenv("SMTP_HOST"),
-		SMTP_PORT:   smtpPort,
-		SMTP_USER:   os.Getenv("SMTP_USERNAME"),
-		SMTP_PASS:   os.Getenv("SMTP_PASSWORD"),
-		SMTP_SENDER: os.Getenv("SMTP_SENDER"),
+		Port:         ":8080", // Default port
+		DB_DSN:       os.Getenv("DATABASE_URL"),
+		JWT_KEY:      os.Getenv("JWT_SECRET"),
+		REDIS_ADDR:   os.Getenv("REDIS_ADDR"),
+		LogTokens:    os.Getenv("LOG_TOKENS") == "true",
+		SMTP_HOST:    os.Getenv("SMTP_HOST"),
+		SMTP_PORT:    smtpPort,
+		SMTP_USER:    os.Getenv("SMTP_USERNAME"),
+		SMTP_PASS:    os.Getenv("SMTP_PASSWORD"),
+		SMTP_SENDER:  os.Getenv("SMTP_SENDER"),
+		METRICS_USER: os.Getenv("METRICS_USERNAME"),
+		METRICS_PASS: os.Getenv("METRICS_PASSWORD"),
+		TRUST_PROXY:  os.Getenv("TRUST_PROXY") == "true",
 	}
 	if portEnv := os.Getenv("PORT"); portEnv != "" {
 		cfg.Port = ":" + portEnv
@@ -109,9 +115,10 @@ func main() {
 		}
 	}()
 
-	svc := service.New(repo, emailSender)
-	a := api.NewAPI(svc, logger, rdb, cfg.JWT_KEY)
+	svc := service.New(repo, emailSender, logger)
+	a := api.NewAPI(svc, logger, rdb, cfg.JWT_KEY, cfg.METRICS_USER, cfg.METRICS_PASS, cfg.TRUST_PROXY)
 	handler := a.Router()
+	handler = api.SecurityHeadersMiddleware(handler)
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
 	handler = a.LoggingMiddleware(handler)
 

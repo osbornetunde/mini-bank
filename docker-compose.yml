@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  app:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - DB_DSN=postgres://${POSTGRES_USER:-bank}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-bank}?sslmode=disable
+      - REDIS_ADDR=${REDIS_ADDR:-redis:6379}
+      - JWT_SECRET=${JWT_SECRET}
+      - METRICS_USERNAME=${METRICS_USERNAME}
+      - METRICS_PASSWORD=${METRICS_PASSWORD}
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_SENDER=${SMTP_SENDER}
+      - TRUST_PROXY=${TRUST_PROXY:-false}
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:15-alpine
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER:-bank}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB:-bank}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+volumes:
+  postgres_data:

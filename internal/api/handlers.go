@@ -17,17 +17,36 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+
+	"mini-bank/pkg/metrics"
+)
+
+const (
+	// Account lockout configuration
+	maxFailedLoginAttempts = 5
+	accountLockoutDuration = 15 * time.Minute
 )
 
 type API struct {
-	service   service.Service
-	logger    *slog.Logger
-	redis     *redis.Client
-	jwtSecret string
+	service         service.Service
+	logger          *slog.Logger
+	redis           *redis.Client
+	jwtSecret       string
+	metricsUsername string
+	metricsPassword string
+	trustProxy      bool
 }
 
-func NewAPI(s service.Service, logger *slog.Logger, rdb *redis.Client, jwtSecret string) *API {
-	return &API{service: s, logger: logger, redis: rdb, jwtSecret: jwtSecret}
+func NewAPI(s service.Service, logger *slog.Logger, rdb *redis.Client, jwtSecret, metricsUser, metricsPass string, trustProxy bool) *API {
+	return &API{
+		service:         s,
+		logger:          logger,
+		redis:           rdb,
+		jwtSecret:       jwtSecret,
+		metricsUsername: metricsUser,
+		metricsPassword: metricsPass,
+		trustProxy:      trustProxy,
+	}
 }
 
 func jsonResponse(w http.ResponseWriter, status int, data any) {
@@ -36,23 +55,86 @@ func jsonResponse(w http.ResponseWriter, status int, data any) {
 	json.NewEncoder(w).Encode(data)
 }
 
+// checkAccountLockout checks if an account is locked due to failed login attempts
+func (a *API) checkAccountLockout(ctx context.Context, email string) (bool, int, error) {
+	key := fmt.Sprintf("login_attempts:%s", email)
+
+	// Get current failed attempts count
+	attempts, err := a.redis.Get(ctx, key).Int()
+	if err != nil && err != redis.Nil {
+		return false, 0, err
+	}
+
+	// Check if account should be locked
+	if attempts >= maxFailedLoginAttempts {
+		// Get TTL to see how long the lockout lasts
+		ttl, err := a.redis.TTL(ctx, key).Result()
+		if err != nil {
+			return false, 0, err
+		}
+
+		// If TTL exists, account is still locked
+		if ttl > 0 {
+			return true, attempts, nil
+		}
+	}
+
+	return false, attempts, nil
+}
+
+// recordFailedLoginAttempt increments the failed login counter for an account
+func (a *API) recordFailedLoginAttempt(ctx context.Context, email string) error {
+	key := fmt.Sprintf("login_attempts:%s", email)
+
+	// Increment counter
+	attempts, err := a.redis.Incr(ctx, key).Result()
+	if err != nil {
+		return err
+	}
+
+	// Set expiry on first failed attempt
+	if attempts == 1 {
+		a.redis.Expire(ctx, key, accountLockoutDuration)
+	}
+
+	// If we just hit the lockout threshold, increment lockout metric
+	if attempts == maxFailedLoginAttempts {
+		metrics.AccountLockouts.Inc()
+		a.logger.Warn("account locked due to failed login attempts",
+			"email", email,
+			"attempts", attempts,
+			"lockout_duration", accountLockoutDuration,
+		)
+	}
+
+	return nil
+}
+
+// resetFailedLoginAttempts clears the failed login counter after successful login
+func (a *API) resetFailedLoginAttempts(ctx context.Context, email string) error {
+	key := fmt.Sprintf("login_attempts:%s", email)
+	return a.redis.Del(ctx, key).Err()
+}
+
 type createAccountRequest struct {
 	UserID         int   `json:"user_id"`
 	InitialBalance int64 `json:"initial_balance"`
 }
 
 type createAccountResponse struct {
-	ID        int       `json:"id"`
-	UserID    int       `json:"user_id"`
-	Balance   int64     `json:"balance"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             int       `json:"id"`
+	UserID         int       `json:"user_id"`
+	Balance        int64     `json:"balance"`
+	OverdraftLimit int64     `json:"overdraft_limit"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type getAccountResponse struct {
-	ID        int       `json:"id"`
-	UserID    int       `json:"user_id"`
-	Balance   int64     `json:"balance"`
-	CreatedAt time.Time `json:"created_at"`
+	ID             int       `json:"id"`
+	UserID         int       `json:"user_id"`
+	Balance        int64     `json:"balance"`
+	OverdraftLimit int64     `json:"overdraft_limit"`
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type getAccountsResponse struct {
@@ -75,6 +157,11 @@ type paymentRequest struct {
 	AccountID int                 `json:"account_id"`
 	Amount    int64               `json:"amount"`
 	Type      storage.PaymentType `json:"type"`
+}
+
+type updateOverdraftLimitRequest struct {
+	AccountID      int   `json:"account_id"`
+	OverdraftLimit int64 `json:"overdraft_limit"`
 }
 
 type createUserRequest struct {
@@ -164,19 +251,18 @@ func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := createAccountResponse{
-		ID:        acc.ID,
-		UserID:    acc.UserID,
-		Balance:   acc.Balance,
-		CreatedAt: acc.CreatedAt,
+		ID:             acc.ID,
+		UserID:         acc.UserID,
+		Balance:        acc.Balance,
+		OverdraftLimit: acc.OverdraftLimit,
+		CreatedAt:      acc.CreatedAt,
 	}
 
 	jsonResponse(w, http.StatusCreated, resp)
 }
 
 func httpError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	jsonResponse(w, status, map[string]string{"error": message})
 }
 
 func (a *API) getAuthorizedAccount(w http.ResponseWriter, r *http.Request, accountID int) *core.Account {
@@ -221,10 +307,11 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := getAccountResponse{
-		ID:        acc.ID,
-		UserID:    acc.UserID,
-		Balance:   acc.Balance,
-		CreatedAt: acc.CreatedAt,
+		ID:             acc.ID,
+		UserID:         acc.UserID,
+		Balance:        acc.Balance,
+		OverdraftLimit: acc.OverdraftLimit,
+		CreatedAt:      acc.CreatedAt,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
@@ -232,14 +319,45 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	accounts, err := a.service.ListAccounts(ctx)
+	userID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	accounts, err := a.service.ListUserAccounts(ctx, userID)
 	if err != nil {
-		a.logger.Error("failed to get accounts", "err", err)
-		httpError(w, http.StatusInternalServerError, "failed to get accounts")
+		a.logger.Error("failed to get accounts", "user_id", userID, "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to retrieve accounts")
 		return
 	}
 
 	var accountsResponse []*getAccountResponse
+	for _, acc := range accounts {
+		accountsResponse = append(accountsResponse, &getAccountResponse{
+			ID:             acc.ID,
+			UserID:         acc.UserID,
+			Balance:        acc.Balance,
+			OverdraftLimit: acc.OverdraftLimit,
+			CreatedAt:      acc.CreatedAt,
+		})
+	}
+
+	jsonResponse(w, http.StatusOK, getAccountsResponse{Accounts: accountsResponse})
+}
+
+func (a *API) UpdateOverdraftLimitHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req updateOverdraftLimitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	userID, ok := ctx.Value(contextKeyUserID).(int)
 	if !ok {
@@ -247,20 +365,37 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, acc := range accounts {
-		if acc.UserID != userID {
-			continue
+	// Verify account belongs to the authenticated user
+	account, err := a.service.GetAccount(ctx, req.AccountID)
+	if err != nil {
+		if errors.Is(err, storage.ErrAccountNotFound) {
+			httpError(w, http.StatusNotFound, "account not found")
+			return
 		}
-		accountsResponse = append(accountsResponse, &getAccountResponse{
-			ID:        acc.ID,
-			UserID:    acc.UserID,
-			Balance:   acc.Balance,
-			CreatedAt: acc.CreatedAt,
-		})
+		a.logger.Error("failed to get account", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to process request")
+		return
 	}
 
-	resp := getAccountsResponse{
-		Accounts: accountsResponse,
+	if account.UserID != userID {
+		httpError(w, http.StatusForbidden, "you can only update overdraft limits for your own accounts")
+		return
+	}
+
+	// Update the overdraft limit
+	updatedAccount, err := a.service.UpdateOverdraftLimit(ctx, req.AccountID, req.OverdraftLimit)
+	if err != nil {
+		a.logger.Error("failed to update overdraft limit", "account_id", req.AccountID, "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to update overdraft limit")
+		return
+	}
+
+	resp := getAccountResponse{
+		ID:             updatedAccount.ID,
+		UserID:         updatedAccount.UserID,
+		Balance:        updatedAccount.Balance,
+		OverdraftLimit: updatedAccount.OverdraftLimit,
+		CreatedAt:      updatedAccount.CreatedAt,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
@@ -275,6 +410,10 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := req.Validate(); err != nil {
+		// Track rejected transactions for monitoring
+		if errors.Is(err, ErrAmountTooLarge) {
+			metrics.RejectedTransactions.WithLabelValues("amount_exceeds_limit", "transfer").Inc()
+		}
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -319,16 +458,18 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	resp := transferResponse{
 		FromAccount: &getAccountResponse{
-			ID:        fromAcc.ID,
-			UserID:    fromAcc.UserID,
-			Balance:   fromAcc.Balance,
-			CreatedAt: fromAcc.CreatedAt,
+			ID:             fromAcc.ID,
+			UserID:         fromAcc.UserID,
+			Balance:        fromAcc.Balance,
+			OverdraftLimit: fromAcc.OverdraftLimit,
+			CreatedAt:      fromAcc.CreatedAt,
 		},
 		ToAccount: &getAccountResponse{
-			ID:        toAcc.ID,
-			UserID:    toAcc.UserID,
-			Balance:   toAcc.Balance,
-			CreatedAt: toAcc.CreatedAt,
+			ID:             toAcc.ID,
+			UserID:         toAcc.UserID,
+			Balance:        toAcc.Balance,
+			OverdraftLimit: toAcc.OverdraftLimit,
+			CreatedAt:      toAcc.CreatedAt,
 		},
 		Reference: reference,
 	}
@@ -344,6 +485,10 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := req.Validate(); err != nil {
+		// Track rejected transactions for monitoring
+		if errors.Is(err, ErrAmountTooLarge) {
+			metrics.RejectedTransactions.WithLabelValues("amount_exceeds_limit", string(req.Type)).Inc()
+		}
 		httpError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -371,10 +516,11 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := getAccountResponse{
-		ID:        paymentResp.ID,
-		UserID:    paymentResp.UserID,
-		Balance:   paymentResp.Balance,
-		CreatedAt: paymentResp.CreatedAt,
+		ID:             paymentResp.ID,
+		UserID:         paymentResp.UserID,
+		Balance:        paymentResp.Balance,
+		OverdraftLimit: paymentResp.OverdraftLimit,
+		CreatedAt:      paymentResp.CreatedAt,
 	}
 	jsonResponse(w, http.StatusOK, resp)
 }
@@ -631,12 +777,43 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Check if account is locked
+	locked, attempts, err := a.checkAccountLockout(ctx, request.Email)
+	if err != nil {
+		a.logger.Error("failed to check account lockout", "err", err)
+		// Continue with login attempt - don't fail due to Redis issues
+	}
+
+	if locked {
+		a.logger.Warn("login attempt on locked account",
+			"email", request.Email,
+			"attempts", attempts,
+		)
+		httpError(w, http.StatusTooManyRequests,
+			"Account temporarily locked due to multiple failed login attempts. Please try again later.")
+		return
+	}
+
 	data, err := a.service.Login(ctx, request.Email, request.Password)
 	if err != nil {
+		// Record failed attempt
+		if recErr := a.recordFailedLoginAttempt(ctx, request.Email); recErr != nil {
+			a.logger.Error("failed to record login attempt", "err", recErr)
+		}
+
+		// Increment failed login metric
+		metrics.FailedLoginAttempts.Inc()
+
 		// We log the actual error for debugging but return a generic message to the user
 		a.logger.Warn("login failed", "email", request.Email, "err", err)
 		httpError(w, http.StatusUnauthorized, "Invalid email or password")
 		return
+	}
+
+	// Successful login - reset failed attempts
+	if resetErr := a.resetFailedLoginAttempts(ctx, request.Email); resetErr != nil {
+		a.logger.Error("failed to reset failed login attempts", "err", resetErr)
+		// Don't fail the login just because we couldn't reset the counter
 	}
 
 	token, err := a.generateJWTToken(data.ID)
@@ -822,4 +999,8 @@ func (a *API) invalidateUserSessions(ctx context.Context, userID int) error {
 
 	_, err = pipeline.Exec(ctx)
 	return err
+}
+
+func (a *API) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	jsonResponse(w, http.StatusOK, map[string]string{"status": "up"})
 }

@@ -5,6 +5,6 @@ type User struct {
 	Email     string
 	FirstName string
 	LastName  string
-	Balance   *int
+	Balance   *int64
 	Password  *string
 }

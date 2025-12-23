@@ -1,2 +1,10 @@
 .idea
+
+# Environment files (contain secrets!)
 .env
+.env.local
+.env.*.local
+
+# But keep example files
+!.env.example
+!.env.docker.example
