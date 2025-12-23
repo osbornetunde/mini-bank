@@ -319,15 +319,10 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	userID, ok := ctx.Value(contextKeyUserID).(int)
-	if !ok {
-		httpError(w, http.StatusUnauthorized, "unauthorized")
-		return
-	}
 
-	accounts, err := a.service.ListUserAccounts(ctx, userID)
+	accounts, err := a.service.ListAccounts(ctx)
 	if err != nil {
-		a.logger.Error("failed to get accounts", "user_id", userID, "err", err)
+		a.logger.Error("failed to get accounts", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to retrieve accounts")
 		return
 	}
