@@ -276,13 +276,15 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 
 	// Record transaction for sender
 	const insFrom = `INSERT INTO transactions (account_id, type, amount, to_account_id, reference, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5)`
-	if _, err := tx.ExecContext(ctx, insFrom, fromID, amount, toID, nullIfEmpty(reference), time.Now().UTC()); err != nil {
+	senderRef := reference + "-from"
+	if _, err := tx.ExecContext(ctx, insFrom, fromID, amount, toID, nullIfEmpty(senderRef), time.Now().UTC()); err != nil {
 		return nil, nil, err
 	}
 
 	// Record transaction for receiver
 	const insTo = `INSERT INTO transactions (account_id, type, amount, from_account_id, reference, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5)`
-	if _, err := tx.ExecContext(ctx, insTo, toID, amount, fromID, nullIfEmpty(reference), time.Now().UTC()); err != nil {
+	receiverRef := reference + "-to"
+	if _, err := tx.ExecContext(ctx, insTo, toID, amount, fromID, nullIfEmpty(receiverRef), time.Now().UTC()); err != nil {
 		return nil, nil, err
 	}
 
