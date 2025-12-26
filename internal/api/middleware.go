@@ -32,7 +32,6 @@ func (rr *responseRecorder) WriteHeader(statusCode int) {
 	rr.ResponseWriter.WriteHeader(statusCode)
 }
 
-
 type contextKey string
 
 const contextKeyUserID contextKey = "user_id"
@@ -138,9 +137,9 @@ func (a *API) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 
 		tokenString := ""
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-				http.Error(w, "Invalid Authorization Header", http.StatusUnauthorized)
-				return
-			}
+			http.Error(w, "Invalid Authorization Header", http.StatusUnauthorized)
+			return
+		}
 		tokenString = authHeader[7:]
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
@@ -205,7 +204,7 @@ func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.
 		ip := getRealIP(r, a.trustProxy)
 
 		key := fmt.Sprintf("ratelimit:%s:%s", r.URL.Path, ip)
-		
+
 		val, err := a.redis.Incr(r.Context(), key).Result()
 		if err != nil {
 			a.logger.Error("rate limit error", "err", err)
@@ -213,50 +212,59 @@ func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.
 			next.ServeHTTP(w, r)
 			return
 		}
-		
+
 		if val == 1 {
 			a.redis.Expire(r.Context(), key, window)
 		}
-		
+
 		if val > int64(limit) {
 			http.Error(w, "Too many requests", http.StatusTooManyRequests)
 			return
 		}
-		
+
 		next.ServeHTTP(w, r)
 	}
 }
 
+// basicAuthCheck performs the actual basic authentication validation.
+// This is shared by both BasicAuthMiddleware and BasicAuthMiddlewareFunc.
+func basicAuthCheck(w http.ResponseWriter, r *http.Request, username, password string) bool {
+	// If no credentials are configured, deny access
+	if username == "" || password == "" {
+		http.Error(w, "Metrics authentication not configured", http.StatusServiceUnavailable)
+		return false
+	}
+
+	// Get credentials from request
+	user, pass, ok := r.BasicAuth()
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+		http.Error(w, "Authentication required", http.StatusUnauthorized)
+		return false
+	}
+
+	// Use constant-time comparison to prevent timing attacks
+	usernameMatch := subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1
+	passwordMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
+
+	if !usernameMatch || !passwordMatch {
+		w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		return false
+	}
+
+	return true
+}
+
 // BasicAuthMiddleware provides HTTP Basic Authentication for an endpoint.
-// This is commonly used for metrics endpoints that need to be accessible by
-// monitoring systems like Prometheus without requiring JWT tokens.
+// This version wraps http.Handler and is used for third-party handlers like Prometheus.
+// For function-based handlers, use BasicAuthMiddlewareFunc instead.
 func BasicAuthMiddleware(username, password string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// If no credentials are configured, deny access
-			if username == "" || password == "" {
-				http.Error(w, "Metrics authentication not configured", http.StatusServiceUnavailable)
+			if !basicAuthCheck(w, r, username, password) {
 				return
 			}
-
-			// Get credentials from request
-			user, pass, ok := r.BasicAuth()
-			if !ok {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
-				http.Error(w, "Authentication required", http.StatusUnauthorized)
-				return
-			}
-
-			// Use constant-time comparison to prevent timing attacks
-			usernameMatch := subtle.ConstantTimeCompare([]byte(user), []byte(username)) == 1
-			passwordMatch := subtle.ConstantTimeCompare([]byte(pass), []byte(password)) == 1
-
-			if !usernameMatch || !passwordMatch {
-				w.Header().Set("WWW-Authenticate", `Basic realm="Metrics"`)
-				http.Error(w, "Invalid credentials", http.StatusUnauthorized)
-				return
-			}
-
 			next.ServeHTTP(w, r)
 		})
 	}
