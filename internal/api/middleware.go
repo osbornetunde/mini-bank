@@ -127,7 +127,7 @@ func (a *API) TimeoutMiddleware(next http.Handler, timeout time.Duration) http.H
 	})
 }
 
-func (a *API) AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
+func (a *API) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
@@ -199,8 +199,8 @@ func (a *API) AuthenticationMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.Duration) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
+func (a *API) RateLimitMiddleware(next http.Handler, limit int, window time.Duration) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := getRealIP(r, a.trustProxy)
 
 		key := fmt.Sprintf("ratelimit:%s:%s", r.URL.Path, ip)
@@ -223,7 +223,7 @@ func (a *API) RateLimitMiddleware(next http.HandlerFunc, limit int, window time.
 		}
 
 		next.ServeHTTP(w, r)
-	}
+	})
 }
 
 // basicAuthCheck performs the actual basic authentication validation.
