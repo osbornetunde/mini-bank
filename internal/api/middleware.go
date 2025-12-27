@@ -131,13 +131,13 @@ func (a *API) AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "Authorization header required", http.StatusUnauthorized)
+			httpError(w, http.StatusUnauthorized, "Authorization header required")
 			return
 		}
 
 		tokenString := ""
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			http.Error(w, "Invalid Authorization Header", http.StatusUnauthorized)
+			httpError(w, http.StatusUnauthorized, "Invalid Authorization Header")
 			return
 		}
 		tokenString = authHeader[7:]
@@ -151,19 +151,19 @@ func (a *API) AuthMiddleware(next http.Handler) http.Handler {
 
 		if err != nil || !token.Valid {
 			a.logger.Warn("invalid token", "err", err)
-			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			httpError(w, http.StatusUnauthorized, "Invalid or expired token")
 			return
 		}
 
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
-			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
+			httpError(w, http.StatusUnauthorized, "Invalid token claims")
 			return
 		}
 
 		userIDFloat, ok := claims["user_id"].(float64)
 		if !ok {
-			http.Error(w, "Invalid user ID in token", http.StatusUnauthorized)
+			httpError(w, http.StatusUnauthorized, "Invalid user ID in token")
 			return
 		}
 
@@ -171,32 +171,6 @@ func (a *API) AuthMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
-}
-
-func (a *API) AuthenticationMiddleware(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		authHeader := r.Header.Get("Authorization")
-
-		if authHeader == "" {
-			http.Error(w, "Authorization header required", http.StatusUnauthorized)
-			return
-		}
-		if !strings.HasPrefix(authHeader, "Bearer") {
-			http.Error(w, "Invalid Authorization Header", http.StatusUnauthorized)
-			return
-		}
-		tokenString := authHeader[7:]
-
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (any, error) {
-			return []byte(a.jwtSecret), nil
-		})
-		if err != nil || !token.Valid {
-			http.Error(w, "Invalid token or expired token", http.StatusUnauthorized)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	}
 }
 
 func (a *API) RateLimitMiddleware(next http.Handler, limit int, window time.Duration) http.Handler {
@@ -218,7 +192,7 @@ func (a *API) RateLimitMiddleware(next http.Handler, limit int, window time.Dura
 		}
 
 		if val > int64(limit) {
-			http.Error(w, "Too many requests", http.StatusTooManyRequests)
+			httpError(w, http.StatusTooManyRequests, "Too many requests")
 			return
 		}
 
