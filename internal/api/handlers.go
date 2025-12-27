@@ -1061,7 +1061,15 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 
 	response, err := a.service.Withdraw(ctx, accountID, req.Amount, req.Reference)
 	if err != nil {
-		httpError(w, http.StatusInternalServerError, "Withdrawal failed")
+		switch {
+		case errors.Is(err, storage.ErrAccountNotFound):
+			httpError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, storage.ErrInsufficientFunds):
+			httpError(w, http.StatusUnprocessableEntity, err.Error())
+		default:
+			a.logger.Error("withdrawal failed", "err", err)
+			httpError(w, http.StatusInternalServerError, "withdrawal failed")
+		}
 		return
 	}
 	res := WithdrawResponse{
