@@ -186,6 +186,11 @@ func (m *MockStorage) CreateAuditLog(ctx context.Context, log *core.AuditLog) er
 	return args.Error(0)
 }
 
+func (m *MockStorage) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
+	args := m.Called(ctx, accountID, amount, reference)
+	return args.Get(0).(*core.Account), args.Error(1)
+}
+
 // MockEmailSender is a mock of the service.EmailSender interface
 type MockEmailSender struct {
 	mock.Mock

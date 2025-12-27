@@ -34,6 +34,7 @@ func (a *API) Router() http.Handler {
 	mux.Handle("POST /api/v1/transactions/payment", a.AuthMiddleware(asHandler(a.PaymentHandler)))
 	mux.Handle("GET /api/v1/accounts/{id}/transactions", a.AuthMiddleware(asHandler(a.GetTransactionsHandler)))
 	mux.Handle("GET /api/v1/transactions/{ref}", a.AuthMiddleware(asHandler(a.GetTransactionHandler)))
+	mux.Handle("PUT /api/v1/transactions/withdraw", a.AuthMiddleware(asHandler(a.WithdrawHandler)))
 
 	// User routes
 	mux.Handle("POST /api/v1/users/create", asHandler(a.CreateUserHandler))

@@ -312,6 +312,10 @@ func (s *FileStore) Payment(ctx context.Context, accountID int, amount int64, pa
 	return &accountCopy, nil
 }
 
+func (s *FileStore) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
+	return s.Payment(ctx, accountID, amount, storage.Withdraw, reference)
+}
+
 // User and Password related methods (Stubs for now to satisfy interface)
 
 func (s *FileStore) CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error) {

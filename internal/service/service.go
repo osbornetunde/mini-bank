@@ -42,6 +42,7 @@ type Service interface {
 	Login(ctx context.Context, email string, password string) (*core.User, error)
 	RequestPasswordReset(ctx context.Context, email string) (token string, err error)
 	ResetPassword(ctx context.Context, token string, newPassword string) (*core.User, error)
+	Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error)
 }
 
 type service struct {
@@ -295,4 +296,9 @@ func (s *service) ResetPassword(ctx context.Context, token string, newPassword s
 		return user, fmt.Errorf("password reset successful but audit log failed: %w", err)
 	}
 	return user, nil
+}
+
+func (s *service) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
+	acc, err := s.store.Withdraw(ctx, accountID, amount, reference)
+	return acc, err
 }

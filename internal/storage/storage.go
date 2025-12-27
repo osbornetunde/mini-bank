@@ -57,4 +57,5 @@ type Storage interface {
 	ResetPasswordTx(ctx context.Context, tokenHash string, hashedPassword string) (userID int, err error)
 
 	CreateAuditLog(ctx context.Context, log *core.AuditLog) error
+	Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error)
 }

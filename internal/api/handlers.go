@@ -229,6 +229,15 @@ type ResetPasswordResponse struct {
 	Message string `json:"message"`
 }
 
+type WithdrawRequest struct {
+	Amount int64 `json:"amount"`
+}
+
+type WithdrawResponse struct {
+	Balance   int64  `json:"balance"`
+	Reference string `json:"reference"`
+}
+
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
 	var req createAccountRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -998,4 +1007,36 @@ func (a *API) invalidateUserSessions(ctx context.Context, userID int) error {
 
 func (a *API) HealthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]string{"status": "up"})
+}
+
+func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req WithdrawRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+
+	}
+
+	if req.Amount <= 0 {
+		httpError(w, http.StatusBadRequest, "amount must be greater than 0")
+		return
+	}
+
+	userID, ok := ctx.Value(contextKeyUserID).(int)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	reference := uuid.NewString()
+	response, err := a.service.Withdraw(ctx, userID, req.Amount, reference)
+	if err != nil {
+		httpError(w, http.StatusInternalServerError, "Withdrawal failed")
+		return
+	}
+	res := WithdrawResponse{
+		Balance:   response.Balance,
+		Reference: reference,
+	}
+	jsonResponse(w, http.StatusOK, res)
 }
