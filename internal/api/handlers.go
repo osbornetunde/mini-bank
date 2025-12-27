@@ -230,7 +230,8 @@ type ResetPasswordResponse struct {
 }
 
 type WithdrawRequest struct {
-	Amount int64 `json:"amount"`
+	Amount    int64  `json:"amount"`
+	Reference string `json:"reference"`
 }
 
 type WithdrawResponse struct {
@@ -1015,7 +1016,11 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid JSON body")
 		return
+	}
 
+	if req.Reference == "" {
+		httpError(w, http.StatusBadRequest, "reference is required")
+		return
 	}
 
 	if req.Amount <= 0 {
@@ -1023,20 +1028,45 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	userID, ok := ctx.Value(contextKeyUserID).(int)
+	accountID, ok := ctx.Value(contextKeyUserID).(int)
 	if !ok {
 		httpError(w, http.StatusUnauthorized, "unauthorized")
 		return
 	}
-	reference := uuid.NewString()
-	response, err := a.service.Withdraw(ctx, userID, req.Amount, reference)
+
+	// Check if transaction with this reference already exists (idempotency)
+	existingTx, err := a.service.GetTransaction(ctx, req.Reference)
+	if err == nil {
+		// Transaction already exists - return current balance (idempotent behavior)
+		account, err := a.service.GetAccount(ctx, accountID)
+		if err != nil {
+			a.logger.Error("failed to get account for existing transaction", "err", err)
+			httpError(w, http.StatusInternalServerError, "failed to process withdrawal")
+			return
+		}
+		res := WithdrawResponse{
+			Balance:   account.Balance,
+			Reference: existingTx.Reference,
+		}
+		jsonResponse(w, http.StatusOK, res)
+		return
+	}
+
+	// Transaction doesn't exist yet (or other error) - process withdrawal
+	if !errors.Is(err, storage.ErrTransactionNotFound) {
+		a.logger.Error("failed to check existing transaction", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to process withdrawal")
+		return
+	}
+
+	response, err := a.service.Withdraw(ctx, accountID, req.Amount, req.Reference)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "Withdrawal failed")
 		return
 	}
 	res := WithdrawResponse{
 		Balance:   response.Balance,
-		Reference: reference,
+		Reference: req.Reference,
 	}
 	jsonResponse(w, http.StatusOK, res)
 }
