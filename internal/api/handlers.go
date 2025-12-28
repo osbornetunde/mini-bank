@@ -230,6 +230,7 @@ type ResetPasswordResponse struct {
 }
 
 type WithdrawRequest struct {
+	AccountID *int   `json:"account_id,omitempty"` // Optional: if not provided, uses first account
 	Amount    int64  `json:"amount"`
 	Reference string `json:"reference"`
 }
@@ -1028,10 +1029,38 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	accountID, ok := ctx.Value(contextKeyUserID).(int)
-	if !ok {
-		httpError(w, http.StatusUnauthorized, "unauthorized")
-		return
+	var accountID int
+
+	// Check if specific account was provided
+	if req.AccountID != nil {
+		// User specified an account - verify ownership
+		acc := a.getAuthorizedAccount(w, r, *req.AccountID)
+		if acc == nil {
+			return
+		}
+		accountID = acc.ID
+	} else {
+		// No account specified - use user's first/primary account
+		userID, ok := ctx.Value(contextKeyUserID).(int)
+		if !ok {
+			httpError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+
+		accounts, err := a.service.ListUserAccounts(ctx, userID)
+		if err != nil {
+			a.logger.Error("failed to get user accounts", "err", err)
+			httpError(w, http.StatusInternalServerError, "failed to process withdrawal")
+			return
+		}
+
+		if len(accounts) == 0 {
+			httpError(w, http.StatusNotFound, "no account found for user")
+			return
+		}
+
+		// Use the first account as default
+		accountID = accounts[0].ID
 	}
 
 	// Check if transaction with this reference already exists (idempotency)
