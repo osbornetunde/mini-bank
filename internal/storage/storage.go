@@ -47,6 +47,7 @@ type Storage interface {
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
 	GetUserByEmail(ctx context.Context, email string) (*core.User, error)
+	UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error
 
 	CreatePasswordResetToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error
 	GetPasswordResetToken(ctx context.Context, tokenHash string) (userID int, expiresAt time.Time, usedAt *time.Time, err error)

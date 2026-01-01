@@ -50,7 +50,7 @@ func scanTransaction(row scanner) (*core.Transaction, error) {
 
 func scanUser(row scanner) (*core.User, error) {
 	var u core.User
-	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Balance); err != nil {
+	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Balance, &u.Permissions); err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -323,11 +323,12 @@ func (r *Repo) GetTransaction(ctx context.Context, ref string) (*core.Transactio
 }
 
 func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error) {
-	const ins = `INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id`
+	const ins = `INSERT INTO users (first_name, last_name, email, password, permissions) VALUES ($1, $2, $3, $4, $5) RETURNING id`
 
 	var id int
+	defaultPermissions := []string{}
 
-	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, password)
+	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, password, defaultPermissions)
 	if err := row.Scan(&id); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -341,7 +342,7 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 		return nil, fmt.Errorf("failed to create user: %w", err)
 	}
 
-	return &core.User{ID: id, FirstName: firstName, LastName: lastName, Email: email}, nil
+	return &core.User{ID: id, FirstName: firstName, LastName: lastName, Email: email, Permissions: defaultPermissions}, nil
 }
 
 func (r *Repo) CreateUserWithAccount(ctx context.Context, firstName string, lastName string, email string, password string, initialBalance int64) (*core.User, error) {
@@ -351,9 +352,10 @@ func (r *Repo) CreateUserWithAccount(ctx context.Context, firstName string, last
 	}
 	defer tx.Rollback()
 
-	const insUser = `INSERT INTO users (first_name, last_name, email, password) VALUES ($1, $2, $3, $4) RETURNING id`
+	const insUser = `INSERT INTO users (first_name, last_name, email, password, permissions) VALUES ($1, $2, $3, $4, $5) RETURNING id`
 	var userID int
-	if err := tx.QueryRowContext(ctx, insUser, firstName, lastName, email, password).Scan(&userID); err != nil {
+	defaultPermissions := []string{}
+	if err := tx.QueryRowContext(ctx, insUser, firstName, lastName, email, password, defaultPermissions).Scan(&userID); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, storage.ErrDuplicateEmail
@@ -374,16 +376,17 @@ func (r *Repo) CreateUserWithAccount(ctx context.Context, firstName string, last
 	}
 
 	return &core.User{
-		ID:        userID,
-		FirstName: firstName,
-		LastName:  lastName,
-		Email:     email,
-		Balance:   &balance,
+		ID:          userID,
+		FirstName:   firstName,
+		LastName:    lastName,
+		Email:       email,
+		Balance:     &balance,
+		Permissions: defaultPermissions,
 	}, nil
 }
 
 func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
-	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance FROM users u INNER JOIN accounts a ON u.id = a.user_id ORDER BY u.id`
+	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions FROM users u INNER JOIN accounts a ON u.id = a.user_id ORDER BY u.id`
 	rows, err := r.db.QueryContext(ctx, q)
 	if err != nil {
 		return nil, err
@@ -392,31 +395,30 @@ func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
 	var users []*core.User
 
 	for rows.Next() {
-		user, err := scanUser(rows)
+		u, err := scanUser(rows)
 		if err != nil {
 			return nil, err
 		}
-		users = append(users, user)
+		users = append(users, u)
 	}
 	return users, rows.Err()
 }
 
 func (r *Repo) GetUser(ctx context.Context, userId int) (*core.User, error) {
-	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.id = $1`
+	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.id = $1`
 	row := r.db.QueryRowContext(ctx, q, userId)
-	user, err := scanUser(row)
+	u, err := scanUser(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, storage.ErrUserNotFound
 		}
 		return nil, err
 	}
-	return user, nil
+	return u, nil
 }
 
 func (r *Repo) UpdateUser(ctx context.Context, id int, firstName, lastName, email string) (*core.User, error) {
-	var user *core.User
-	q := `UPDATE users u SET first_name = $2, last_name = $3, email = $4 FROM accounts a WHERE u.id = $1 AND a.user_id = u.id RETURNING u.id, u.first_name, u.last_name, u.email, a.balance`
+	q := `UPDATE users u SET first_name = $2, last_name = $3, email = $4 FROM accounts a WHERE u.id = $1 AND a.user_id = u.id RETURNING u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions`
 	row := r.db.QueryRowContext(ctx, q, id, firstName, lastName, email)
 	user, err := scanUser(row)
 	if err != nil {
@@ -448,16 +450,19 @@ func (r *Repo) DeleteUser(ctx context.Context, id int) error {
 }
 
 func (r *Repo) GetUserByEmail(ctx context.Context, email string) (*core.User, error) {
-	q := `SELECT id, email, password, first_name, last_name FROM users WHERE email = $1`
+	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions, u.password FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.email = $1`
 
+	row := r.db.QueryRowContext(ctx, q, email)
 	var user core.User
+	var password string
 
-	if err := r.db.QueryRowContext(ctx, q, email).Scan(&user.ID, &user.Email, &user.Password, &user.FirstName, &user.LastName); err != nil {
+	if err := row.Scan(&user.ID, &user.FirstName, &user.LastName, &user.Email, &user.Balance, &user.Permissions, &password); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, storage.ErrUserNotFound
 		}
 		return nil, fmt.Errorf("failed to get user by email: %w", err)
 	}
+	user.Password = &password
 	return &user, nil
 }
 
@@ -583,6 +588,25 @@ func (r *Repo) CreateAuditLog(ctx context.Context, log *core.AuditLog) error {
 }
 
 // Helpers
+func (r *Repo) UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error {
+	const q = `UPDATE users SET permissions = $1 WHERE id = $2`
+	result, err := r.db.ExecContext(ctx, q, permissions, userID)
+	if err != nil {
+		return fmt.Errorf("failed to update user permissions: %w", err)
+	}
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("failed to get rows affected: %w", err)
+	}
+
+	if rowsAffected == 0 {
+		return storage.ErrUserNotFound
+	}
+
+	return nil
+}
+
 func nullIfEmpty(s string) any {
 	if s == "" {
 		return nil

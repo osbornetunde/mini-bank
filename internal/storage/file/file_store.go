@@ -346,6 +346,10 @@ func (s *FileStore) GetUserByEmail(ctx context.Context, email string) (*core.Use
 	return nil, fmt.Errorf("not implemented")
 }
 
+func (s *FileStore) UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error {
+	return fmt.Errorf("not implemented")
+}
+
 func (s *FileStore) CreatePasswordResetToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error {
 	return fmt.Errorf("not implemented")
 }

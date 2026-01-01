@@ -39,6 +39,7 @@ type Service interface {
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
+	UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error
 	Login(ctx context.Context, email string, password string) (*core.User, error)
 	RequestPasswordReset(ctx context.Context, email string) (token string, err error)
 	ResetPassword(ctx context.Context, token string, newPassword string) (*core.User, error)
@@ -181,6 +182,24 @@ func (s *service) UpdateUser(ctx context.Context, id int, firstName string, last
 
 func (s *service) DeleteUser(ctx context.Context, id int) error {
 	return s.store.DeleteUser(ctx, id)
+}
+
+func (s *service) UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error {
+	// Validate that all permissions are valid
+	for _, perm := range permissions {
+		if !core.IsValidPermission(perm) {
+			return fmt.Errorf("invalid permission: %s", perm)
+		}
+	}
+
+	if err := s.store.UpdateUserPermissions(ctx, userID, permissions); err != nil {
+		return err
+	}
+
+	// Log the permission change
+	_ = s.logActivity(ctx, userID, "permissions_updated", fmt.Sprintf("permissions set to: %v", permissions))
+
+	return nil
 }
 
 func (s *service) Login(ctx context.Context, email string, password string) (*core.User, error) {

@@ -5,6 +5,7 @@ import (
 	"crypto/subtle"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -34,7 +35,10 @@ func (rr *responseRecorder) WriteHeader(statusCode int) {
 
 type contextKey string
 
-const contextKeyUserID contextKey = "user_id"
+const (
+	contextKeyUserID      contextKey = "user_id"
+	contextKeyPermissions contextKey = "permissions"
+)
 
 // getRealIP extracts the real client IP address from the request.
 // It checks proxy headers (X-Forwarded-For, X-Real-IP) if the application
@@ -167,10 +171,50 @@ func (a *API) AuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), contextKeyUserID, int(userIDFloat))
+		userID := int(userIDFloat)
+
+		// Extract permissions from JWT claims
+		permissions := []string{}
+		if permsInterface, ok := claims["permissions"]; ok {
+			if permsList, ok := permsInterface.([]interface{}); ok {
+				for _, p := range permsList {
+					if permStr, ok := p.(string); ok {
+						permissions = append(permissions, permStr)
+					}
+				}
+			}
+		}
+
+		ctx := context.WithValue(r.Context(), contextKeyUserID, userID)
+		ctx = context.WithValue(ctx, contextKeyPermissions, permissions)
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// RequirePermission checks if the authenticated user has the specified permission.
+// Must be used after AuthMiddleware.
+func (a *API) RequirePermission(permission string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			perms, ok := r.Context().Value(contextKeyPermissions).([]string)
+			if !ok {
+				httpError(w, http.StatusForbidden, "permission denied")
+				return
+			}
+
+			if !slices.Contains(perms, permission) {
+				a.logger.Warn("permission denied",
+					"required", permission,
+					"user_permissions", perms,
+				)
+				httpError(w, http.StatusForbidden, "permission denied")
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func (a *API) RateLimitMiddleware(next http.Handler, limit int, window time.Duration) http.Handler {

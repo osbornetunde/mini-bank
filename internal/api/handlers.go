@@ -604,7 +604,7 @@ func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenString, err := a.generateJWTToken(resp.ID)
+	tokenString, err := a.generateJWTToken(resp.ID, resp.Permissions)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to generate JWT token")
 		return
@@ -822,7 +822,7 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 		// Don't fail the login just because we couldn't reset the counter
 	}
 
-	token, err := a.generateJWTToken(data.ID)
+	token, err := a.generateJWTToken(data.ID, data.Permissions)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -867,7 +867,15 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		a.logger.Error("failed to delete old refresh token", "err", err)
 	}
 
-	newToken, err := a.generateJWTToken(userID)
+	// Fetch user to get current permissions
+	user, err := a.service.GetUser(ctx, userID)
+	if err != nil {
+		a.logger.Error("failed to fetch user for token refresh", "user_id", userID, "err", err)
+		httpError(w, http.StatusUnauthorized, "user not found")
+		return
+	}
+
+	newToken, err := a.generateJWTToken(userID, user.Permissions)
 	if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to generate token")
 		return
@@ -882,13 +890,14 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	jsonResponse(w, http.StatusOK, map[string]string{"token": newToken, "refresh_token": newRefreshToken})
 }
 
-func (a *API) generateJWTToken(userID int) (string, error) {
+func (a *API) generateJWTToken(userID int, permissions []string) (string, error) {
 	token := jwt.NewWithClaims(
 		jwt.SigningMethodHS256,
 		jwt.MapClaims{
-			"user_id": userID,
-			"exp":     time.Now().Add(time.Minute * 10).Unix(),
-			"app":     "mini-bank",
+			"user_id":     userID,
+			"permissions": permissions,
+			"exp":         time.Now().Add(time.Minute * 10).Unix(),
+			"app":         "mini-bank",
 		},
 	)
 	tokenString, err := token.SignedString([]byte(a.jwtSecret))
@@ -1106,4 +1115,81 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 		Reference: req.Reference,
 	}
 	jsonResponse(w, http.StatusOK, res)
+}
+
+type UpdatePermissionsRequest struct {
+	Permissions []string `json:"permissions"`
+}
+
+type PermissionsResponse struct {
+	UserID      int      `json:"user_id"`
+	Permissions []string `json:"permissions"`
+}
+
+// UpdateUserPermissionsHandler updates the permissions for a user.
+// Only users with the permissions_manage permission can access this endpoint.
+func (a *API) UpdateUserPermissionsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	userIDStr := r.PathValue("id")
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "invalid user ID")
+		return
+	}
+
+	var req UpdatePermissionsRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate permissions
+	if req.Permissions == nil {
+		httpError(w, http.StatusBadRequest, "permissions field is required")
+		return
+	}
+
+	if err := a.service.UpdateUserPermissions(ctx, userID, req.Permissions); err != nil {
+		if errors.Is(err, storage.ErrUserNotFound) {
+			httpError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		a.logger.Error("failed to update permissions", "err", err)
+		httpError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, PermissionsResponse{
+		UserID:      userID,
+		Permissions: req.Permissions,
+	})
+}
+
+// GetUserPermissionsHandler returns the permissions for a user.
+func (a *API) GetUserPermissionsHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
+	userIDStr := r.PathValue("id")
+	userID, err := strconv.Atoi(userIDStr)
+	if err != nil {
+		httpError(w, http.StatusBadRequest, "invalid user ID")
+		return
+	}
+
+	user, err := a.service.GetUser(ctx, userID)
+	if err != nil {
+		if errors.Is(err, storage.ErrUserNotFound) {
+			httpError(w, http.StatusNotFound, "user not found")
+			return
+		}
+		a.logger.Error("failed to get user", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to get user")
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, PermissionsResponse{
+		UserID:      userID,
+		Permissions: user.Permissions,
+	})
 }

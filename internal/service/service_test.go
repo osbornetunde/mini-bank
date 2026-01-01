@@ -146,6 +146,11 @@ func (m *MockStorage) GetUserByEmail(ctx context.Context, email string) (*core.U
 	return args.Get(0).(*core.User), args.Error(1)
 }
 
+func (m *MockStorage) UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error {
+	args := m.Called(ctx, userID, permissions)
+	return args.Error(0)
+}
+
 func (m *MockStorage) CreatePasswordResetToken(ctx context.Context, userID int, tokenHash string, expiresAt time.Time) error {
 	args := m.Called(ctx, userID, tokenHash, expiresAt)
 	return args.Error(0)
@@ -218,7 +223,7 @@ func TestService_CreateUser(t *testing.T) {
 	password := "Password123!"
 
 	mockStore.On("CreateUserWithAccount", mock.Anything, firstName, lastName, email, mock.Anything, int64(0)).
-		Return(&core.User{ID: 1, FirstName: firstName, LastName: lastName, Email: email}, nil)
+		Return(&core.User{ID: 1, FirstName: firstName, LastName: lastName, Email: email, Permissions: []string{}}, nil)
 	mockStore.On("CreateAuditLog", mock.Anything, mock.Anything).Return(nil)
 
 	user, err := s.CreateUser(context.Background(), firstName, lastName, email, password)
