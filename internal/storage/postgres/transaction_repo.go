@@ -11,6 +11,7 @@ import (
 	"mini-bank/internal/storage"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/lib/pq"
 )
 
 // Ensure our repo implements storage.Storage partially (we'll implement methods we need)
@@ -50,7 +51,7 @@ func scanTransaction(row scanner) (*core.Transaction, error) {
 
 func scanUser(row scanner) (*core.User, error) {
 	var u core.User
-	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Balance, &u.Permissions); err != nil {
+	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, &u.Balance, pq.Array(&u.Permissions)); err != nil {
 		return nil, err
 	}
 	return &u, nil
@@ -328,7 +329,7 @@ func (r *Repo) CreateUser(ctx context.Context, firstName string, lastName string
 	var id int
 	defaultPermissions := []string{}
 
-	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, password, defaultPermissions)
+	row := r.db.QueryRowContext(ctx, ins, firstName, lastName, email, password, pq.Array(defaultPermissions))
 	if err := row.Scan(&id); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
@@ -355,7 +356,7 @@ func (r *Repo) CreateUserWithAccount(ctx context.Context, firstName string, last
 	const insUser = `INSERT INTO users (first_name, last_name, email, password, permissions) VALUES ($1, $2, $3, $4, $5) RETURNING id`
 	var userID int
 	defaultPermissions := []string{}
-	if err := tx.QueryRowContext(ctx, insUser, firstName, lastName, email, password, defaultPermissions).Scan(&userID); err != nil {
+	if err := tx.QueryRowContext(ctx, insUser, firstName, lastName, email, password, pq.Array(defaultPermissions)).Scan(&userID); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 			return nil, storage.ErrDuplicateEmail
@@ -456,7 +457,7 @@ func (r *Repo) GetUserByEmail(ctx context.Context, email string) (*core.User, er
 	var user core.User
 	var password string
 
-	if err := row.Scan(&user.ID, &user.FirstName, &user.LastName, &user.Email, &user.Balance, &user.Permissions, &password); err != nil {
+	if err := row.Scan(&user.ID, &user.FirstName, &user.LastName, &user.Email, &user.Balance, pq.Array(&user.Permissions), &password); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, storage.ErrUserNotFound
 		}
@@ -590,7 +591,7 @@ func (r *Repo) CreateAuditLog(ctx context.Context, log *core.AuditLog) error {
 // Helpers
 func (r *Repo) UpdateUserPermissions(ctx context.Context, userID int, permissions []string) error {
 	const q = `UPDATE users SET permissions = $1 WHERE id = $2`
-	result, err := r.db.ExecContext(ctx, q, permissions, userID)
+	result, err := r.db.ExecContext(ctx, q, pq.Array(permissions), userID)
 	if err != nil {
 		return fmt.Errorf("failed to update user permissions: %w", err)
 	}
