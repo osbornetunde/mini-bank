@@ -147,6 +147,67 @@ func (s *Store) ListTransactions(ctx context.Context, accountID int) ([]*core.Tr
 	return list, nil
 }
 
+// ListTransactionsPaginated returns paginated transactions for an account with optional filters
+func (s *Store) ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// First, filter transactions by account ID and optional filters
+	var filtered []*core.Transaction
+	for _, t := range s.transactions {
+		if t.AccountID != accountID {
+			continue
+		}
+
+		// Apply status filter
+		if filters.Status != "" && t.Type != filters.Status {
+			continue
+		}
+
+		// Apply reference filter
+		if filters.Reference != "" && t.Reference != filters.Reference {
+			continue
+		}
+
+		// Apply date range filters
+		if filters.DateFrom != nil && t.Timestamp.Before(*filters.DateFrom) {
+			continue
+		}
+		if filters.DateTo != nil && t.Timestamp.After(*filters.DateTo) {
+			continue
+		}
+
+		// Create a copy to avoid returning internal pointers
+		c := *t
+		filtered = append(filtered, &c)
+	}
+
+	totalCount := int64(len(filtered))
+
+	// Apply pagination
+	start := pagination.Offset
+	end := pagination.Offset + pagination.Limit
+
+	// Handle bounds
+	if start > len(filtered) {
+		start = len(filtered)
+	}
+	if end > len(filtered) {
+		end = len(filtered)
+	}
+
+	// Slice for pagination
+	var paginated []*core.Transaction
+	if start < end {
+		paginated = filtered[start:end]
+	}
+
+	return &storage.PaginatedResult{
+		Transactions: paginated,
+		TotalCount:   totalCount,
+	}, nil
+}
+
 func (s *Store) GetTransaction(ctx context.Context, ref string) (*core.Transaction, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

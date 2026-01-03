@@ -26,6 +26,26 @@ const (
 	Withdraw PaymentType = "withdraw"
 )
 
+// TransactionFilters contains optional filters for listing transactions
+type TransactionFilters struct {
+	Status    string     // Filter by transaction type: "deposit", "withdraw", "transfer"
+	Reference string     // Filter by exact transaction reference
+	DateFrom  *time.Time // Transactions from this date (inclusive)
+	DateTo    *time.Time // Transactions until this date (inclusive)
+}
+
+// PaginationParams contains pagination parameters
+type PaginationParams struct {
+	Limit  int // Number of items per page
+	Offset int // Number of items to skip
+}
+
+// PaginatedResult contains paginated transaction results
+type PaginatedResult struct {
+	Transactions []*core.Transaction
+	TotalCount   int64
+}
+
 // Storage defines how accounts and transactions are persisted.
 type Storage interface {
 	CreateAccount(ctx context.Context, userID int, initialBalance int64) (*core.Account, error)
@@ -36,6 +56,7 @@ type Storage interface {
 
 	RecordTransaction(ctx context.Context, tx *core.Transaction) error
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
+	ListTransactionsPaginated(ctx context.Context, accountID int, filters TransactionFilters, pagination PaginationParams) (*PaginatedResult, error)
 	GetTransaction(ctx context.Context, ref string) (*core.Transaction, error)
 
 	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)

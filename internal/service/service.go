@@ -34,6 +34,7 @@ type Service interface {
 	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)
 	Payment(ctx context.Context, accountID int, amount int64, pType storage.PaymentType, reference string) (*core.Account, error)
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
+	ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error)
 	GetTransaction(ctx context.Context, reference string) (*core.Transaction, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 	GetUsers(ctx context.Context) ([]*core.User, error)
@@ -158,6 +159,10 @@ func (s *service) Payment(ctx context.Context, accountID int, amount int64, pTyp
 
 func (s *service) ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error) {
 	return s.store.ListTransactions(ctx, accountID)
+}
+
+func (s *service) ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error) {
+	return s.store.ListTransactionsPaginated(ctx, accountID, filters, pagination)
 }
 
 func (s *service) GetTransaction(ctx context.Context, reference string) (*core.Transaction, error) {
