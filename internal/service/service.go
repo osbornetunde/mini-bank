@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -60,14 +61,25 @@ func New(store storage.Storage, emailSender EmailSender, logger *slog.Logger) Se
 	}
 }
 
-func (s *service) logActivity(ctx context.Context, userID int, action string, metadata string) error {
+func (s *service) logActivity(ctx context.Context, userID int, action string, metadata map[string]any) error {
 	ip, _ := ctx.Value(ContextKeyIP).(string)
 	ua, _ := ctx.Value(ContextKeyUserAgent).(string)
+
+	var metaJSON string
+	if metadata != nil {
+		b, err := json.Marshal(metadata)
+		if err != nil {
+			s.logger.Error("failed to marshal audit metadata", "err", err)
+			// We continue with empty metadata rather than failing
+		} else {
+			metaJSON = string(b)
+		}
+	}
 
 	log := &core.AuditLog{
 		UserID:    userID,
 		Action:    action,
-		Metadata:  metadata,
+		Metadata:  metaJSON,
 		IP:        ip,
 		UserAgent: ua,
 		CreatedAt: time.Now().UTC(),
@@ -159,7 +171,7 @@ func (s *service) CreateUser(ctx context.Context, firstName string, lastName str
 	}
 	res, err := s.store.CreateUserWithAccount(ctx, firstName, lastName, email, hashedPassword, 0)
 	if err == nil && res != nil {
-		if logErr := s.logActivity(ctx, res.ID, "user_created", fmt.Sprintf("email: %s", email)); logErr != nil {
+		if logErr := s.logActivity(ctx, res.ID, "user_created", map[string]any{"email": email}); logErr != nil {
 			// User is created but audit failed. We return the error but also the user.
 			// The caller can decide how to handle this partial success.
 			return res, fmt.Errorf("user created but audit log failed: %w", logErr)
@@ -197,7 +209,7 @@ func (s *service) UpdateUserPermissions(ctx context.Context, userID int, permiss
 	}
 
 	// Log the permission change
-	_ = s.logActivity(ctx, userID, "permissions_updated", fmt.Sprintf("permissions set to: %v", permissions))
+	_ = s.logActivity(ctx, userID, "permissions_updated", map[string]any{"permissions": permissions})
 
 	return nil
 }
@@ -213,11 +225,11 @@ func (s *service) Login(ctx context.Context, email string, password string) (*co
 	}
 
 	if err := verifyPassword(*user.Password, password); err != nil {
-		_ = s.logActivity(ctx, user.ID, "login_failed", "invalid password")
+		_ = s.logActivity(ctx, user.ID, "login_failed", map[string]any{"reason": "invalid_password"})
 		return nil, storage.ErrInvalidCredentials
 	}
 
-	if err := s.logActivity(ctx, user.ID, "login_success", ""); err != nil {
+	if err := s.logActivity(ctx, user.ID, "login_success", nil); err != nil {
 		return nil, fmt.Errorf("audit log failed: %w", err)
 	}
 	return user, nil
@@ -277,7 +289,7 @@ func (s *service) RequestPasswordReset(ctx context.Context, email string) (strin
 		return "", err
 	}
 
-	if err := s.logActivity(ctx, user.ID, "password_reset_requested", ""); err != nil {
+	if err := s.logActivity(ctx, user.ID, "password_reset_requested", nil); err != nil {
 		// If audit fails, we should probably fail the request to ensure traceability
 		// However, email is already sent. This is tricky.
 		// For fail-closed, we return error.
@@ -311,7 +323,7 @@ func (s *service) ResetPassword(ctx context.Context, token string, newPassword s
 		// For now we just ignore it as it's non-critical path
 	}
 
-	if err := s.logActivity(ctx, user.ID, "password_reset_success", ""); err != nil {
+	if err := s.logActivity(ctx, user.ID, "password_reset_success", nil); err != nil {
 		return user, fmt.Errorf("password reset successful but audit log failed: %w", err)
 	}
 	return user, nil

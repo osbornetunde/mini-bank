@@ -11,20 +11,88 @@ A development/testing utility to populate the mini-bank database with sample dat
 
 ## What It Does
 
-The seeder creates:
-1. **3 Test Users** with accounts and initial balances
-2. **5 Random Transfers** between accounts
-3. **Withdrawals** from each account
+The seeder creates a **comprehensive banking environment** with:
+1. **3 Test Users** with role-based permissions (Admin, Manager, User)
+2. **5 Accounts** (3 primary + 2 additional savings/business accounts)
+3. **Overdraft Limits** (Premium, Standard, Basic tiers)
+4. **Realistic Transaction History:**
+   - 5 Deposits (salaries, payments, refunds)
+   - 5 Transfers (loans, gifts, invoices)
+   - 5 Withdrawals (ATM, cash, teller)
+5. **Multiple Accounts per User** (checking + savings/business)
 
 ### Test Users Created
 
-| Name | Email | Password | Initial Balance |
-|------|-------|----------|----------------|
-| Alice Smith | alice@example.com | password123* | $1,000.00 |
-| Bob Jones | bob@example.com | password123* | $500.00 |
-| Charlie Brown | charlie@example.com | password123* | $750.00 |
+| Name | Email | Password | Role | Initial Balance |
+|------|-------|----------|------|----------------|
+| Alice Admin | alice@example.com | password123* | Admin | $1,000.00 |
+| Bob Manager | bob@example.com | password123* | Manager | $500.00 |
+| Charlie User | charlie@example.com | password123* | User | $750.00 |
 
 *Default password (configurable via `SEED_PASSWORD`)
+
+### User Roles & Permissions
+
+#### 1. **Admin** (alice@example.com)
+Full system administrator with all permissions:
+- ✅ `accounts_read`, `accounts_write`, `accounts_update`
+- ✅ `transactions_read`, `transactions_process`
+- ✅ `users_read`, `users_write`, `users_update`
+- ✅ `permissions_manage`
+
+**Can do:** Everything - manage users, accounts, transactions, and permissions
+
+---
+
+#### 2. **Manager** (bob@example.com)
+Operations manager with most permissions:
+- ✅ `accounts_read`, `accounts_write`, `accounts_update`
+- ✅ `transactions_read`, `transactions_process`
+- ✅ `users_read`
+- ❌ Cannot manage permissions or modify users
+
+**Can do:** Create/manage accounts, process transactions, view users
+
+---
+
+#### 3. **User** (charlie@example.com)
+Standard user with read-only access:
+- ✅ `accounts_read`
+- ✅ `transactions_read`
+- ❌ Cannot create accounts, process transactions, or manage users
+
+**Can do:** View accounts and transactions only
+
+### Account Types & Overdraft Limits
+
+The seeder creates different account tiers:
+
+| User | Account Type | Overdraft Limit | Additional Accounts |
+|------|--------------|-----------------|---------------------|
+| Admin | Premium | $500.00 | Savings ($2,000) |
+| Manager | Standard | $200.00 | Business ($1,000) |
+| User | Basic | $0.00 | None |
+
+### Transaction Scenarios Seeded
+
+**Deposits (5 total):**
+- Salary deposits
+- Freelance payments
+- Cash deposits
+- Refunds
+- Bonuses
+
+**Transfers (5 total):**
+- Loan payments
+- Gifts
+- Invoice payments
+- Repayments
+- Shared expenses
+
+**Withdrawals (5 total):**
+- ATM withdrawals
+- Cash withdrawals
+- Bank teller withdrawals
 
 ## Usage
 
@@ -83,28 +151,98 @@ Truncated table: password_reset_tokens
 Truncated table: users
 Database cleaned successfully.
 Seeding users...
-Created user: alice@example.com (ID: 1)
-Created user: bob@example.com (ID: 2)
-Created user: charlie@example.com (ID: 3)
-Simulating transactions...
-Transferring 1234 from Account 1 to Account 2...
-Transfer successful.
-Transferring 2345 from Account 2 to Account 3...
-Transfer successful.
+Created user: alice@example.com (ID: 1, Role: Admin)
+Assigned permissions to alice@example.com: [accounts_read accounts_write accounts_update transactions_read transactions_process users_read users_write users_update permissions_manage]
+Created user: bob@example.com (ID: 2, Role: Manager)
+Assigned permissions to bob@example.com: [accounts_read accounts_write accounts_update transactions_read transactions_process users_read]
+Created user: charlie@example.com (ID: 3, Role: User)
+Assigned permissions to charlie@example.com: [accounts_read transactions_read]
+Setting overdraft limits...
+Set overdraft for Account 1: Premium Account ($500 overdraft)
+Set overdraft for Account 2: Standard Account ($200 overdraft)
+Set overdraft for Account 3: Basic Account (no overdraft)
+Simulating deposits...
+Depositing 25000 cents to Account 1 (Salary deposit)...
+Deposit successful: Salary deposit
+Depositing 15000 cents to Account 2 (Freelance payment)...
+Deposit successful: Freelance payment
+...
+Simulating transfers...
+Transferring 5000 cents from Account 1 to Account 2 (Loan payment)...
+Transfer successful: Loan payment
 ...
 Simulating withdrawals...
-Withdrawing 567 from Account 1...
-Withdrawal successful.
+Withdrawing 10000 cents from Account 1 (ATM withdrawal)...
+Withdrawal successful: ATM withdrawal
 ...
+Creating additional accounts...
+Created Savings Account (ID: 4) for user 1 with balance $2000.00
+Created Business Account (ID: 5) for user 2 with balance $1000.00
 Seeding complete.
 ```
 
 ## Idempotency
 
 The seeder is **idempotent** - you can run it multiple times safely:
-- If users already exist, it skips creation
+- If users already exist, it skips creation and **updates their permissions**
 - Existing accounts are reused for transactions
 - Use `SEED_CLEAN=true` to start completely fresh
+
+## Testing Permission-Based Access
+
+After seeding, test the permission system with different users:
+
+### Test Admin Access (alice@example.com)
+```bash
+# Login as admin
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"alice@example.com","password":"password123"}' | jq -r '.token')
+
+# Admin can manage permissions (✅ succeeds)
+curl -X PUT http://localhost:8080/api/v1/users/2/permissions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"permissions":["accounts_read","transactions_read"]}'
+```
+
+### Test Manager Access (bob@example.com)
+```bash
+# Login as manager
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"bob@example.com","password":"password123"}' | jq -r '.token')
+
+# Manager can process transactions (✅ succeeds)
+curl -X POST http://localhost:8080/api/v1/transactions/transfer \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"from_account_id":1,"to_account_id":2,"amount":1000}'
+
+# Manager cannot manage permissions (❌ fails with 403)
+curl -X PUT http://localhost:8080/api/v1/users/3/permissions \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"permissions":["accounts_read"]}'
+```
+
+### Test Regular User Access (charlie@example.com)
+```bash
+# Login as regular user
+TOKEN=$(curl -s -X POST http://localhost:8080/api/v1/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"charlie@example.com","password":"password123"}' | jq -r '.token')
+
+# User can read accounts (✅ succeeds)
+curl -X GET http://localhost:8080/api/v1/accounts \
+  -H "Authorization: Bearer $TOKEN"
+
+# User cannot create accounts (❌ fails with 403)
+curl -X POST http://localhost:8080/api/v1/accounts \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id":3,"balance":5000}'
+```
 
 ## Testing Workflow
 
@@ -136,12 +274,31 @@ SEED_CLEAN=true go run cmd/seed/main.go
 go test ./...
 ```
 
+## What's Seeded vs Not Seeded
+
+### ✅ Fully Seeded Features
+- **Users** with role-based permissions
+- **Accounts** with varied balances
+- **Overdraft Limits** (Premium, Standard, Basic)
+- **Deposits** with realistic references
+- **Transfers** between accounts
+- **Withdrawals** from accounts
+- **Multiple Accounts** per user
+- **Transaction History** with meaningful references
+
+### ❌ Not Seeded (Generated Automatically or Not Needed)
+- **Audit Logs** - Created automatically by middleware during API calls
+- **Password Reset Tokens** - Temporary, created on-demand during password reset flow
+- **JWT Tokens** - Generated during login, not persisted
+- **Failed Transactions** - Could be added if needed for testing error scenarios
+
 ## Notes
 
 - **Balance Units**: All balances are in cents (100 = $1.00)
-- **Transactions**: Randomly generated for realistic test data
+- **Transactions**: Realistic scenarios with meaningful references
 - **Passwords**: All test users share the same password (configurable)
 - **Email Format**: Uses `example.com` to avoid real email addresses
+- **Overdrafts**: Different tiers to test overdraft functionality
 
 ## Troubleshooting
 

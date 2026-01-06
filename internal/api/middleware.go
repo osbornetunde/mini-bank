@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"net"
 	"net/http"
 	"slices"
 	"strconv"
@@ -81,13 +82,14 @@ func getRealIP(r *http.Request, trustProxy bool) string {
 	}
 
 	// Fallback to RemoteAddr (direct connection or proxy headers not trusted)
-	// RemoteAddr format is "IP:port", so we need to strip the port
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx != -1 {
-		ip = ip[:idx]
+	// Use net.SplitHostPort to handle both IPv4 and IPv6 addresses correctly
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		// If SplitHostPort fails, RemoteAddr might not have a port
+		// This is unusual but valid - just return it as-is
+		return r.RemoteAddr
 	}
-
-	return ip
+	return host
 }
 
 // LoggingMiddleware logs details about each incoming request.

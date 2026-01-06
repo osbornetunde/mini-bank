@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 
 	"mini-bank/internal/core"
@@ -57,14 +56,48 @@ func main() {
 	hash := string(hashedPassword)
 
 	users := []struct {
-		First   string
-		Last    string
-		Email   string
-		Balance int64 // Balance in cents (100 = $1.00)
+		First       string
+		Last        string
+		Email       string
+		Balance     int64 // Balance in cents (100 = $1.00)
+		Permissions []string
+		Role        string
 	}{
-		{"Alice", "Smith", "alice@example.com", 100000},    // $1000.00
-		{"Bob", "Jones", "bob@example.com", 50000},         // $500.00
-		{"Charlie", "Brown", "charlie@example.com", 75000}, // $750.00
+		{
+			"Alice", "Admin", "alice@example.com", 100000,
+			[]string{
+				core.PermAccountsRead,
+				core.PermAccountsWrite,
+				core.PermAccountsUpdate,
+				core.PermTransactionsRead,
+				core.PermTransactionsProcess,
+				core.PermUsersRead,
+				core.PermUsersWrite,
+				core.PermUsersUpdate,
+				core.PermPermissionsManage,
+			},
+			"Admin",
+		},
+		{
+			"Bob", "Manager", "bob@example.com", 50000,
+			[]string{
+				core.PermAccountsRead,
+				core.PermAccountsWrite,
+				core.PermAccountsUpdate,
+				core.PermTransactionsRead,
+				core.PermTransactionsProcess,
+				core.PermUsersRead,
+			},
+			"Manager",
+		},
+		{
+			"Charlie", "User", "charlie@example.com", 75000,
+			[]string{
+				core.PermAccountsRead,
+				core.PermTransactionsRead,
+			},
+			"User",
+		},
 	}
 
 	var createdAccounts []*core.Account
@@ -74,7 +107,15 @@ func main() {
 		// Check if user exists first to avoid duplicates on re-runs
 		existing, err := repo.GetUserByEmail(ctx, u.Email)
 		if err == nil && existing != nil {
-			fmt.Printf("User %s already exists, skipping creation.\n", u.Email)
+			fmt.Printf("User %s already exists, updating permissions.\n", u.Email)
+
+			// Update permissions for existing user
+			if err := repo.UpdateUserPermissions(ctx, existing.ID, u.Permissions); err != nil {
+				log.Printf("Failed to update permissions for %s: %v", u.Email, err)
+			} else {
+				fmt.Printf("Updated permissions for %s (%s): %v\n", u.Email, u.Role, u.Permissions)
+			}
+
 			// Find their account
 			if acc := findUserAccount(ctx, repo, existing.ID); acc != nil {
 				createdAccounts = append(createdAccounts, acc)
@@ -87,7 +128,14 @@ func main() {
 			log.Printf("Failed to create user %s: %v", u.Email, err)
 			continue
 		}
-		fmt.Printf("Created user: %s (ID: %d)\n", u.Email, user.ID)
+		fmt.Printf("Created user: %s (ID: %d, Role: %s)\n", u.Email, user.ID, u.Role)
+
+		// Set permissions for the new user
+		if err := repo.UpdateUserPermissions(ctx, user.ID, u.Permissions); err != nil {
+			log.Printf("Failed to set permissions for %s: %v", u.Email, err)
+		} else {
+			fmt.Printf("Assigned permissions to %s: %v\n", u.Email, u.Permissions)
+		}
 
 		// Find the account we just created
 		if acc := findUserAccount(ctx, repo, user.ID); acc != nil {
@@ -102,43 +150,202 @@ func main() {
 		return
 	}
 
-	// 2. Simulate Transactions
-	fmt.Println("Simulating transactions...")
+	// 2. Set Overdraft Limits
+	fmt.Println("Setting overdraft limits...")
+	overdraftLimits := []struct {
+		AccountID int
+		Limit     int64
+		Type      string
+	}{
+		{createdAccounts[0].ID, 50000, "Premium Account ($500 overdraft)"},  // Admin gets premium account
+		{createdAccounts[1].ID, 20000, "Standard Account ($200 overdraft)"}, // Manager gets standard
+		{createdAccounts[2].ID, 0, "Basic Account (no overdraft)"},          // User has no overdraft
+	}
 
-	for i := range 5 {
-		fromIdx := rand.Intn(len(createdAccounts))
-		toIdx := rand.Intn(len(createdAccounts))
-		if fromIdx == toIdx {
-			toIdx = (fromIdx + 1) % len(createdAccounts)
-		}
-
-		from := createdAccounts[fromIdx]
-		to := createdAccounts[toIdx]
-		amount := int64(rand.Intn(5000) + 100) // Random amount between 1.00 and 51.00
-
-		fmt.Printf("Transferring %d from Account %d to Account %d...\n", amount, from.ID, to.ID)
-		_, _, err := repo.Transfer(ctx, from.ID, to.ID, amount, fmt.Sprintf("seed-transfer-%d", i))
+	for _, od := range overdraftLimits {
+		_, err := repo.UpdateOverdraftLimit(ctx, od.AccountID, od.Limit)
 		if err != nil {
-			log.Printf("Transfer failed: %v", err)
+			log.Printf("Failed to set overdraft for account %d: %v", od.AccountID, err)
 		} else {
-			fmt.Println("Transfer successful.")
+			fmt.Printf("Set overdraft for Account %d: %s\n", od.AccountID, od.Type)
 		}
 	}
 
-	// 3. Simulate Withdrawals
+	// 3. Simulate Deposits
+	fmt.Println("Simulating deposits...")
+	deposits := []struct {
+		AccountIndex int
+		Amount       int64
+		Reference    string
+	}{
+		{0, 25000, "Salary deposit"},
+		{1, 15000, "Freelance payment"},
+		{2, 10000, "Cash deposit"},
+		{0, 5000, "Refund"},
+		{1, 8000, "Bonus"},
+	}
+
+	for i, dep := range deposits {
+		if dep.AccountIndex < len(createdAccounts) {
+			acc := createdAccounts[dep.AccountIndex]
+			fmt.Printf("Depositing %d cents to Account %d (%s)...\n", dep.Amount, acc.ID, dep.Reference)
+			_, err := repo.Deposit(ctx, acc.ID, dep.Amount, fmt.Sprintf("seed-deposit-%d-%s", i, dep.Reference))
+			if err != nil {
+				log.Printf("Deposit failed: %v", err)
+			} else {
+				fmt.Printf("Deposit successful: %s\n", dep.Reference)
+			}
+		}
+	}
+
+	// 4. Simulate Transfers
+	fmt.Println("Simulating transfers...")
+	transfers := []struct {
+		FromIndex int
+		ToIndex   int
+		Amount    int64
+		Reference string
+	}{
+		{0, 1, 5000, "Loan payment"},
+		{1, 2, 3000, "Gift"},
+		{0, 2, 10000, "Invoice payment"},
+		{2, 0, 2000, "Repayment"},
+		{1, 0, 4000, "Shared expense"},
+	}
+
+	for i, tr := range transfers {
+		if tr.FromIndex < len(createdAccounts) && tr.ToIndex < len(createdAccounts) {
+			from := createdAccounts[tr.FromIndex]
+			to := createdAccounts[tr.ToIndex]
+			fmt.Printf("Transferring %d cents from Account %d to Account %d (%s)...\n", tr.Amount, from.ID, to.ID, tr.Reference)
+			_, _, err := repo.Transfer(ctx, from.ID, to.ID, tr.Amount, fmt.Sprintf("seed-transfer-%d-%s", i, tr.Reference))
+			if err != nil {
+				log.Printf("Transfer failed: %v", err)
+			} else {
+				fmt.Printf("Transfer successful: %s\n", tr.Reference)
+			}
+		}
+	}
+
+	// 5. Simulate Withdrawals
 	fmt.Println("Simulating withdrawals...")
-	for _, acc := range createdAccounts {
-		amount := int64(rand.Intn(2000) + 100)
-		fmt.Printf("Withdrawing %d from Account %d...\n", amount, acc.ID)
-		_, err := repo.Withdraw(ctx, acc.ID, amount, fmt.Sprintf("seed-withdraw-%d", acc.ID))
-		if err != nil {
-			log.Printf("Withdrawal failed: %v", err)
-		} else {
-			fmt.Println("Withdrawal successful.")
+	withdrawals := []struct {
+		AccountIndex int
+		Amount       int64
+		Reference    string
+	}{
+		{0, 10000, "ATM withdrawal"},
+		{1, 5000, "Cash withdrawal"},
+		{2, 3000, "ATM withdrawal"},
+		{0, 2000, "Bank teller"},
+		{1, 1500, "ATM withdrawal"},
+	}
+
+	for i, wd := range withdrawals {
+		if wd.AccountIndex < len(createdAccounts) {
+			acc := createdAccounts[wd.AccountIndex]
+			fmt.Printf("Withdrawing %d cents from Account %d (%s)...\n", wd.Amount, acc.ID, wd.Reference)
+			_, err := repo.Withdraw(ctx, acc.ID, wd.Amount, fmt.Sprintf("seed-withdraw-%d-%s", i, wd.Reference))
+			if err != nil {
+				log.Printf("Withdrawal failed: %v", err)
+			} else {
+				fmt.Printf("Withdrawal successful: %s\n", wd.Reference)
+			}
 		}
 	}
 
-	fmt.Println("Seeding complete.")
+	// 6. Create Additional Accounts (multiple accounts per user + edge cases)
+	fmt.Println("Creating additional accounts...")
+	additionalAccounts := []struct {
+		UserIndex int
+		Balance   int64
+		Type      string
+	}{
+		{0, 200000, "Savings Account"},  // Admin gets a savings account
+		{1, 100000, "Business Account"}, // Manager gets a business account
+		{2, 0, "Zero Balance Account"},  // Edge case: zero balance account
+		{0, 1, "Micro Balance Account"}, // Edge case: $0.01 balance
+	}
+
+	for _, addAcc := range additionalAccounts {
+		if addAcc.UserIndex < len(createdAccounts) {
+			userID := createdAccounts[addAcc.UserIndex].UserID
+			acc, err := repo.CreateAccount(ctx, userID, addAcc.Balance)
+			if err != nil {
+				log.Printf("Failed to create %s for user %d: %v", addAcc.Type, userID, err)
+			} else {
+				fmt.Printf("Created %s (ID: %d) for user %d with balance $%.2f\n",
+					addAcc.Type, acc.ID, userID, float64(addAcc.Balance)/100)
+			}
+		}
+	}
+
+	// 7. Simulate Transaction Failures (Edge Cases)
+	fmt.Println("\nSimulating transaction failures (expected errors)...")
+
+	// Test insufficient funds
+	fmt.Println("Testing insufficient funds...")
+	if len(createdAccounts) > 2 {
+		charlieAccount := createdAccounts[2] // Charlie (User) has ~$750 balance
+		_, err := repo.Withdraw(ctx, charlieAccount.ID, 100000000, "seed-failure-insufficient-funds")
+		if err != nil {
+			fmt.Printf("✓ Insufficient funds error caught (expected): %v\n", err)
+		} else {
+			log.Printf("⚠ WARNING: Withdrawal should have failed due to insufficient funds!")
+		}
+	}
+
+	// Test overdraft limit exceeded
+	fmt.Println("Testing overdraft limit...")
+	if len(createdAccounts) > 2 {
+		charlieAccount := createdAccounts[2] // Charlie has $0 overdraft limit
+		currentBalance := charlieAccount.Balance
+		_, err := repo.Withdraw(ctx, charlieAccount.ID, currentBalance+1000, "seed-failure-overdraft-exceeded")
+		if err != nil {
+			fmt.Printf("✓ Overdraft limit error caught (expected): %v\n", err)
+		} else {
+			log.Printf("⚠ WARNING: Withdrawal should have failed due to overdraft limit!")
+		}
+	}
+
+	// Test transfer to non-existent account
+	fmt.Println("Testing transfer to invalid account...")
+	if len(createdAccounts) > 0 {
+		aliceAccount := createdAccounts[0]
+		_, _, err := repo.Transfer(ctx, aliceAccount.ID, 999999, 100, "seed-failure-invalid-account")
+		if err != nil {
+			fmt.Printf("✓ Invalid account error caught (expected): %v\n", err)
+		} else {
+			log.Printf("⚠ WARNING: Transfer should have failed due to invalid account!")
+		}
+	}
+
+	// Test transfer from account with insufficient balance
+	fmt.Println("Testing transfer with insufficient balance...")
+	if len(createdAccounts) > 1 {
+		charlieAccount := createdAccounts[2]
+		aliceAccount := createdAccounts[0]
+		_, _, err := repo.Transfer(ctx, charlieAccount.ID, aliceAccount.ID, 50000000, "seed-failure-insufficient-for-transfer")
+		if err != nil {
+			fmt.Printf("✓ Insufficient balance error caught (expected): %v\n", err)
+		} else {
+			log.Printf("⚠ WARNING: Transfer should have failed due to insufficient balance!")
+		}
+	}
+
+	// Test negative amount (should be prevented)
+	fmt.Println("Testing negative amount withdrawal...")
+	if len(createdAccounts) > 0 {
+		aliceAccount := createdAccounts[0]
+		_, err := repo.Withdraw(ctx, aliceAccount.ID, -1000, "seed-failure-negative-amount")
+		if err != nil {
+			fmt.Printf("✓ Negative amount error caught (expected): %v\n", err)
+		} else {
+			log.Printf("⚠ WARNING: Negative amount withdrawal should have been prevented!")
+		}
+	}
+
+	fmt.Println("\n✓ Seeding complete with edge case validation.")
 }
 
 // findUserAccount finds the first account belonging to a user
