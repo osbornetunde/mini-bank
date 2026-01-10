@@ -218,6 +218,102 @@ func (r *Repo) ListTransactions(ctx context.Context, accountID int) ([]*core.Tra
 	return res, rows.Err()
 }
 
+// ListTransactionsPaginated returns paginated transactions for an account with optional filters
+func (r *Repo) ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error) {
+	// Build WHERE clause dynamically
+	whereClause := "WHERE account_id = $1"
+	args := []interface{}{accountID}
+	argCount := 1
+
+	// Add optional filters
+	if filters.Status != "" {
+		argCount++
+		whereClause += fmt.Sprintf(" AND type = $%d", argCount)
+		args = append(args, filters.Status)
+	}
+
+	if filters.Reference != "" {
+		argCount++
+		whereClause += fmt.Sprintf(" AND reference = $%d", argCount)
+		args = append(args, filters.Reference)
+	}
+
+	if filters.DateFrom != nil {
+		argCount++
+		whereClause += fmt.Sprintf(" AND created_at >= $%d", argCount)
+		args = append(args, filters.DateFrom)
+	}
+
+	if filters.DateTo != nil {
+		argCount++
+		whereClause += fmt.Sprintf(" AND created_at <= $%d", argCount)
+		args = append(args, filters.DateTo)
+	}
+
+	// Get total count with filters
+	countQuery := fmt.Sprintf("SELECT COUNT(*) FROM transactions %s", whereClause)
+	var totalCount int64
+	err := r.db.QueryRowContext(ctx, countQuery, args...).Scan(&totalCount)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count transactions: %w", err)
+	}
+
+	// Get paginated results
+	argCount++
+	limitPlaceholder := fmt.Sprintf("$%d", argCount)
+	args = append(args, pagination.Limit)
+
+	argCount++
+	offsetPlaceholder := fmt.Sprintf("$%d", argCount)
+	args = append(args, pagination.Offset)
+
+	query := fmt.Sprintf(`
+		SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at
+		FROM transactions
+		%s
+		ORDER BY created_at DESC
+		LIMIT %s OFFSET %s
+	`, whereClause, limitPlaceholder, offsetPlaceholder)
+
+	rows, err := r.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list transactions: %w", err)
+	}
+	defer rows.Close()
+
+	var transactions []*core.Transaction
+	for rows.Next() {
+		var t core.Transaction
+		var from sql.NullInt64
+		var to sql.NullInt64
+		var ref sql.NullString
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &ref, &from, &to, &t.Timestamp); err != nil {
+			return nil, fmt.Errorf("failed to scan transaction: %w", err)
+		}
+		if ref.Valid {
+			t.Reference = ref.String
+		}
+		if from.Valid {
+			v := int(from.Int64)
+			t.FromAccountID = &v
+		}
+		if to.Valid {
+			v := int(to.Int64)
+			t.ToAccountID = &v
+		}
+		transactions = append(transactions, &t)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating transactions: %w", err)
+	}
+
+	return &storage.PaginatedResult{
+		Transactions: transactions,
+		TotalCount:   totalCount,
+	}, nil
+}
+
 // UpdateBalance updates an account's balance.
 func (r *Repo) UpdateBalance(ctx context.Context, id int, newBalance int64) error {
 	const q = `UPDATE accounts SET balance = $1 WHERE id = $2`

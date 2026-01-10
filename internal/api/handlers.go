@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"time"
@@ -545,12 +546,81 @@ func (a *API) GetTransactionsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := a.service.ListTransactions(ctx, accountID)
+	// Parse pagination parameters
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20 // default
+	}
+
+	// Parse filters
+	filters := storage.TransactionFilters{
+		Status:    r.URL.Query().Get("status"),
+		Reference: r.URL.Query().Get("reference"),
+	}
+
+	// Parse date filters
+	if dateFromStr := r.URL.Query().Get("date_from"); dateFromStr != "" {
+		dateFrom, err := time.Parse("2006-01-02", dateFromStr)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, "Invalid date_from format. Use YYYY-MM-DD")
+			return
+		}
+		filters.DateFrom = &dateFrom
+	}
+
+	if dateToStr := r.URL.Query().Get("date_to"); dateToStr != "" {
+		dateTo, err := time.Parse("2006-01-02", dateToStr)
+		if err != nil {
+			httpError(w, http.StatusBadRequest, "Invalid date_to format. Use YYYY-MM-DD")
+			return
+		}
+		// Set time to end of day
+		dateTo = dateTo.Add(23*time.Hour + 59*time.Minute + 59*time.Second)
+		filters.DateTo = &dateTo
+	}
+
+	// Validate status filter if provided
+	if filters.Status != "" && filters.Status != "deposit" && filters.Status != "withdraw" && filters.Status != "transfer" {
+		httpError(w, http.StatusBadRequest, "Invalid status. Must be: deposit, withdraw, or transfer")
+		return
+	}
+
+	// Validate date range
+	if filters.DateFrom != nil && filters.DateTo != nil && filters.DateFrom.After(*filters.DateTo) {
+		httpError(w, http.StatusBadRequest, "date_from cannot be after date_to")
+		return
+	}
+
+	// Call paginated service method
+	result, err := a.service.ListTransactionsPaginated(ctx, accountID, filters, storage.PaginationParams{
+		Limit:  limit,
+		Offset: (page - 1) * limit,
+	})
 	if err != nil {
 		a.logger.Error("failed to list transactions", "err", err)
 		httpError(w, http.StatusInternalServerError, "could not retrieve transactions")
 		return
 	}
+
+	// Build pagination metadata
+	totalPages := int(math.Ceil(float64(result.TotalCount) / float64(limit)))
+	response := map[string]interface{}{
+		"data": result.Transactions,
+		"pagination": map[string]interface{}{
+			"page":         page,
+			"limit":        limit,
+			"total_items":  result.TotalCount,
+			"total_pages":  totalPages,
+			"has_next":     page < totalPages,
+			"has_previous": page > 1,
+		},
+	}
+
 	jsonResponse(w, http.StatusOK, response)
 }
 

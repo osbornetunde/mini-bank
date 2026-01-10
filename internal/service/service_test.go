@@ -69,6 +69,14 @@ func (m *MockStorage) ListTransactions(ctx context.Context, accountID int) ([]*c
 	return args.Get(0).([]*core.Transaction), args.Error(1)
 }
 
+func (m *MockStorage) ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error) {
+	args := m.Called(ctx, accountID, filters, pagination)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.PaginatedResult), args.Error(1)
+}
+
 func (m *MockStorage) GetTransaction(ctx context.Context, ref string) (*core.Transaction, error) {
 	args := m.Called(ctx, ref)
 	if args.Get(0) == nil {
