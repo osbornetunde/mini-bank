@@ -46,6 +46,12 @@ type PaginatedResult struct {
 	TotalCount   int64
 }
 
+// UsersPaginatedResult contains paginated user results
+type UsersPaginatedResult struct {
+	Users      []*core.User
+	TotalCount int64
+}
+
 // Storage defines how accounts and transactions are persisted.
 type Storage interface {
 	CreateAccount(ctx context.Context, userID int, initialBalance int64) (*core.Account, error)
@@ -63,7 +69,7 @@ type Storage interface {
 	Payment(ctx context.Context, accountID int, amount int64, paymentType PaymentType, reference string) (*core.Account, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 	CreateUserWithAccount(ctx context.Context, firstName string, lastName string, email string, password string, initialBalance int64) (*core.User, error)
-	GetUsers(ctx context.Context) ([]*core.User, error)
+	GetUsers(ctx context.Context, pagination PaginationParams) (*UsersPaginatedResult, error)
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error

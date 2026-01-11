@@ -482,49 +482,134 @@ func (r *Repo) CreateUserWithAccount(ctx context.Context, firstName string, last
 	}, nil
 }
 
-func (r *Repo) GetUsers(ctx context.Context) ([]*core.User, error) {
-	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions FROM users u INNER JOIN accounts a ON u.id = a.user_id ORDER BY u.id`
-	rows, err := r.db.QueryContext(ctx, q)
+func (r *Repo) GetUsers(ctx context.Context, pagination storage.PaginationParams) (*storage.UsersPaginatedResult, error) {
+	// Use CTE with window function to get total count and paginated results in a single query
+	q := `
+		WITH paginated_users AS (
+			SELECT id, first_name, last_name, email, permissions,
+			       COUNT(*) OVER() as total_count
+			FROM users
+			ORDER BY id
+			LIMIT $1 OFFSET $2
+		)
+		SELECT
+			u.id, u.first_name, u.last_name, u.email, u.permissions, u.total_count,
+			a.id, a.balance, a.overdraft_limit, a.created_at
+		FROM paginated_users u
+		LEFT JOIN accounts a ON u.id = a.user_id
+		ORDER BY u.id, a.id
+	`
+	rows, err := r.db.QueryContext(ctx, q, pagination.Limit, pagination.Offset)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to query users: %w", err)
 	}
 	defer rows.Close()
+
+	userMap := make(map[int]*core.User)
 	var users []*core.User
+	var totalCount int64
 
 	for rows.Next() {
-		u, err := scanUser(rows)
-		if err != nil {
-			return nil, err
+		var userID int
+		var firstName, lastName, email string
+		var permissions []string
+		var rowTotalCount int64
+
+		var accountID sql.NullInt64
+		var balance sql.NullInt64
+		var overdraftLimit sql.NullInt64
+		var createdAt sql.NullTime
+
+		if err := rows.Scan(
+			&userID, &firstName, &lastName, &email, pq.Array(&permissions), &rowTotalCount,
+			&accountID, &balance, &overdraftLimit, &createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan user row: %w", err)
 		}
-		users = append(users, u)
+
+		// Total count is the same for all rows, capture it once
+		if totalCount == 0 {
+			totalCount = rowTotalCount
+		}
+
+		user, exists := userMap[userID]
+		if !exists {
+			user = &core.User{
+				ID:          userID,
+				FirstName:   firstName,
+				LastName:    lastName,
+				Email:       email,
+				Permissions: permissions,
+				Balance:     nil, // Calculated via domain method
+				Accounts:    []*core.Account{},
+			}
+			users = append(users, user)
+			userMap[userID] = user
+		}
+
+		if accountID.Valid {
+			acc := &core.Account{
+				ID:             int(accountID.Int64),
+				UserID:         userID,
+				Balance:        balance.Int64,
+				OverdraftLimit: overdraftLimit.Int64,
+				CreatedAt:      createdAt.Time,
+			}
+			user.Accounts = append(user.Accounts, acc)
+		}
 	}
-	return users, rows.Err()
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating user rows: %w", err)
+	}
+
+	return &storage.UsersPaginatedResult{
+		Users:      users,
+		TotalCount: totalCount,
+	}, nil
 }
 
 func (r *Repo) GetUser(ctx context.Context, userId int) (*core.User, error) {
-	q := `SELECT u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions FROM users u INNER JOIN accounts a ON u.id = a.user_id WHERE u.id = $1`
+	q := `
+		SELECT u.id, u.first_name, u.last_name, u.email, u.permissions,
+		       COALESCE(SUM(a.balance), 0) as total_balance
+		FROM users u
+		LEFT JOIN accounts a ON u.id = a.user_id
+		WHERE u.id = $1
+		GROUP BY u.id, u.first_name, u.last_name, u.email, u.permissions
+	`
 	row := r.db.QueryRowContext(ctx, q, userId)
-	u, err := scanUser(row)
-	if err != nil {
+
+	var u core.User
+	var totalBalance int64
+	if err := row.Scan(&u.ID, &u.FirstName, &u.LastName, &u.Email, pq.Array(&u.Permissions), &totalBalance); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, storage.ErrUserNotFound
 		}
-		return nil, err
+		return nil, fmt.Errorf("failed to get user: %w", err)
 	}
-	return u, nil
+	u.Balance = &totalBalance
+	return &u, nil
 }
 
 func (r *Repo) UpdateUser(ctx context.Context, id int, firstName, lastName, email string) (*core.User, error) {
-	q := `UPDATE users u SET first_name = $2, last_name = $3, email = $4 FROM accounts a WHERE u.id = $1 AND a.user_id = u.id RETURNING u.id, u.first_name, u.last_name, u.email, a.balance, u.permissions`
-	row := r.db.QueryRowContext(ctx, q, id, firstName, lastName, email)
-	user, err := scanUser(row)
+	// First update the user
+	updateQ := `UPDATE users SET first_name = $2, last_name = $3, email = $4 WHERE id = $1`
+	result, err := r.db.ExecContext(ctx, updateQ, id, firstName, lastName, email)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return nil, storage.ErrUserNotFound
-		}
-		return nil, err
+		return nil, fmt.Errorf("failed to update user: %w", err)
 	}
-	return user, nil
+
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get rows affected: %w", err)
+	}
+	if rowsAffected == 0 {
+		return nil, storage.ErrUserNotFound
+	}
+
+	// Then fetch the updated user with aggregated balance
+	return r.GetUser(ctx, id)
 }
 
 func (r *Repo) DeleteUser(ctx context.Context, id int) error {
