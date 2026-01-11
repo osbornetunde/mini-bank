@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"mini-bank/internal/core"
@@ -138,6 +139,21 @@ type getAccountResponse struct {
 	CreatedAt      time.Time `json:"created_at"`
 }
 
+// toAccountResponse converts a core.Account to an API response.
+// This helper reduces duplication across handlers.
+func toAccountResponse(acc *core.Account) *getAccountResponse {
+	if acc == nil {
+		return nil
+	}
+	return &getAccountResponse{
+		ID:             acc.ID,
+		UserID:         acc.UserID,
+		Balance:        acc.Balance,
+		OverdraftLimit: acc.OverdraftLimit,
+		CreatedAt:      acc.CreatedAt,
+	}
+}
+
 type getAccountsResponse struct {
 	Accounts []*getAccountResponse `json:"accounts"`
 }
@@ -185,6 +201,7 @@ type usersResponse struct {
 	FirstName string `json:"first_name"`
 	LastName  string `json:"last_name"`
 	Email     string `json:"email"`
+	Balance   int64  `json:"balance"`
 }
 
 type userResponse struct {
@@ -318,15 +335,7 @@ func (a *API) GetAccountHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := getAccountResponse{
-		ID:             acc.ID,
-		UserID:         acc.UserID,
-		Balance:        acc.Balance,
-		OverdraftLimit: acc.OverdraftLimit,
-		CreatedAt:      acc.CreatedAt,
-	}
-
-	jsonResponse(w, http.StatusOK, resp)
+	jsonResponse(w, http.StatusOK, toAccountResponse(acc))
 }
 
 func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
@@ -341,13 +350,7 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var accountsResponse []*getAccountResponse
 	for _, acc := range accounts {
-		accountsResponse = append(accountsResponse, &getAccountResponse{
-			ID:             acc.ID,
-			UserID:         acc.UserID,
-			Balance:        acc.Balance,
-			OverdraftLimit: acc.OverdraftLimit,
-			CreatedAt:      acc.CreatedAt,
-		})
+		accountsResponse = append(accountsResponse, toAccountResponse(acc))
 	}
 
 	jsonResponse(w, http.StatusOK, getAccountsResponse{Accounts: accountsResponse})
@@ -397,15 +400,7 @@ func (a *API) UpdateOverdraftLimitHandler(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp := getAccountResponse{
-		ID:             updatedAccount.ID,
-		UserID:         updatedAccount.UserID,
-		Balance:        updatedAccount.Balance,
-		OverdraftLimit: updatedAccount.OverdraftLimit,
-		CreatedAt:      updatedAccount.CreatedAt,
-	}
-
-	jsonResponse(w, http.StatusOK, resp)
+	jsonResponse(w, http.StatusOK, toAccountResponse(updatedAccount))
 }
 
 func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
@@ -464,21 +459,9 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := transferResponse{
-		FromAccount: &getAccountResponse{
-			ID:             fromAcc.ID,
-			UserID:         fromAcc.UserID,
-			Balance:        fromAcc.Balance,
-			OverdraftLimit: fromAcc.OverdraftLimit,
-			CreatedAt:      fromAcc.CreatedAt,
-		},
-		ToAccount: &getAccountResponse{
-			ID:             toAcc.ID,
-			UserID:         toAcc.UserID,
-			Balance:        toAcc.Balance,
-			OverdraftLimit: toAcc.OverdraftLimit,
-			CreatedAt:      toAcc.CreatedAt,
-		},
-		Reference: reference,
+		FromAccount: toAccountResponse(fromAcc),
+		ToAccount:   toAccountResponse(toAcc),
+		Reference:   reference,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
@@ -522,14 +505,7 @@ func (a *API) PaymentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := getAccountResponse{
-		ID:             paymentResp.ID,
-		UserID:         paymentResp.UserID,
-		Balance:        paymentResp.Balance,
-		OverdraftLimit: paymentResp.OverdraftLimit,
-		CreatedAt:      paymentResp.CreatedAt,
-	}
-	jsonResponse(w, http.StatusOK, resp)
+	jsonResponse(w, http.StatusOK, toAccountResponse(paymentResp))
 }
 
 func (a *API) GetTransactionsHandler(w http.ResponseWriter, r *http.Request) {
@@ -691,24 +667,56 @@ func (a *API) CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) GetUsersHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	resp, err := a.service.GetUsers(ctx)
+
+	// Parse pagination parameters
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 100 {
+		limit = 20
+	}
+
+	pagination := storage.PaginationParams{
+		Limit:  limit,
+		Offset: (page - 1) * limit,
+	}
+
+	result, err := a.service.GetUsers(ctx, pagination)
 	if err != nil {
 		a.logger.Error("failed to get users", "err", err)
 		httpError(w, http.StatusInternalServerError, "failed to retrieve users")
 		return
 	}
 
-	var users []*usersResponse
-	for _, user := range resp {
+	// Initialize with empty slice to ensure JSON returns [] instead of null
+	users := make([]*usersResponse, 0, len(result.Users))
+	for _, user := range result.Users {
 		users = append(users, &usersResponse{
 			ID:        user.ID,
 			FirstName: user.FirstName,
 			LastName:  user.LastName,
 			Email:     user.Email,
+			Balance:   user.CalculateTotalBalance(),
 		})
 	}
 
-	jsonResponse(w, http.StatusOK, users)
+	totalPages := int(math.Ceil(float64(result.TotalCount) / float64(limit)))
+
+	response := map[string]interface{}{
+		"data": users,
+		"pagination": map[string]interface{}{
+			"page":         page,
+			"limit":        limit,
+			"total_items":  result.TotalCount,
+			"total_pages":  totalPages,
+			"has_next":     page < totalPages,
+			"has_previous": page > 1,
+		},
+	}
+
+	jsonResponse(w, http.StatusOK, response)
 }
 
 func (a *API) GetUserHandler(w http.ResponseWriter, r *http.Request) {
@@ -910,6 +918,47 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Extract and validate the expired JWT from Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		httpError(w, http.StatusUnauthorized, "authorization header required")
+		return
+	}
+
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		httpError(w, http.StatusUnauthorized, "invalid authorization header")
+		return
+	}
+
+	tokenString := authHeader[7:]
+
+	// Parse JWT without validating expiration (but still validate signature)
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	token, err := parser.Parse(tokenString, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(a.jwtSecret), nil
+	})
+
+	if err != nil {
+		a.logger.Warn("failed to parse JWT for refresh", "err", err)
+		httpError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "invalid token claims")
+		return
+	}
+
+	jwtUserID, ok := claims["user_id"].(float64)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "invalid user_id in token")
+		return
+	}
+
 	var request RefreshTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid request")
@@ -919,7 +968,7 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	key := fmt.Sprintf("session:%s", request.RefreshToken)
 	userIDstr, err := a.redis.Get(ctx, key).Result()
 	if err == redis.Nil {
-		httpError(w, http.StatusUnauthorized, "invalid token")
+		httpError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	} else if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to get token")
@@ -930,6 +979,13 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.logger.Error("invalid user ID in refresh token", "user_id", userIDstr, "err", err)
 		httpError(w, http.StatusInternalServerError, "invalid session data")
+		return
+	}
+
+	// Verify that the JWT user ID matches the refresh token's user ID
+	if int(jwtUserID) != userID {
+		a.logger.Warn("refresh token user ID mismatch", "jwt_user_id", int(jwtUserID), "refresh_user_id", userID)
+		httpError(w, http.StatusUnauthorized, "token mismatch")
 		return
 	}
 

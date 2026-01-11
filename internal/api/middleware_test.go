@@ -10,6 +10,7 @@ import (
 
 	"mini-bank/internal/core"
 	"mini-bank/internal/service"
+	"mini-bank/internal/storage"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/stretchr/testify/assert"
@@ -27,6 +28,14 @@ func (m *mockService) GetUser(ctx context.Context, id int) (*core.User, error) {
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*core.User), args.Error(1)
+}
+
+func (m *mockService) GetUsers(ctx context.Context, pagination storage.PaginationParams) (*storage.UsersPaginatedResult, error) {
+	args := m.Called(ctx, pagination)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*storage.UsersPaginatedResult), args.Error(1)
 }
 
 func TestRequirePermission(t *testing.T) {
@@ -316,6 +325,132 @@ func TestGetRealIP(t *testing.T) {
 
 			result := getRealIP(req, tt.trustProxy)
 			assert.Equal(t, tt.expectedIP, result, tt.description)
+		})
+	}
+}
+
+func TestToAccountResponse(t *testing.T) {
+	t.Run("nil account returns nil", func(t *testing.T) {
+		result := toAccountResponse(nil)
+		assert.Nil(t, result)
+	})
+
+	t.Run("valid account returns response", func(t *testing.T) {
+		now := time.Now()
+		acc := &core.Account{
+			ID:             42,
+			UserID:         1,
+			Balance:        1500,
+			OverdraftLimit: 500,
+			CreatedAt:      now,
+		}
+
+		result := toAccountResponse(acc)
+
+		assert.NotNil(t, result)
+		assert.Equal(t, 42, result.ID)
+		assert.Equal(t, 1, result.UserID)
+		assert.Equal(t, int64(1500), result.Balance)
+		assert.Equal(t, int64(500), result.OverdraftLimit)
+		assert.Equal(t, now, result.CreatedAt)
+	})
+
+	t.Run("negative balance preserved", func(t *testing.T) {
+		acc := &core.Account{
+			ID:             1,
+			UserID:         1,
+			Balance:        -200, // Overdraft
+			OverdraftLimit: 500,
+			CreatedAt:      time.Now(),
+		}
+
+		result := toAccountResponse(acc)
+
+		assert.Equal(t, int64(-200), result.Balance)
+	})
+}
+
+func TestGetUsersHandler_ResponseStructure(t *testing.T) {
+	mockSvc := new(mockService)
+	api := &API{
+		service: mockSvc,
+		logger:  slog.New(slog.NewTextHandler(httptest.NewRecorder(), nil)),
+	}
+
+	// now := time.Now()
+	zeroBalance := int64(0)
+	// totalBalance unused in modified tests
+
+
+	tests := []struct {
+		name          string
+		mockUsers     []*core.User
+		checkResponse func(t *testing.T, body string)
+	}{
+		{
+			name: "User with zero accounts",
+			mockUsers: []*core.User{
+				{
+					ID:          1,
+					FirstName:   "John",
+					LastName:    "Doe",
+					Email:       "john@example.com",
+					Balance:     &zeroBalance,
+					Permissions: []string{},
+					Accounts:    []*core.Account{},
+				},
+			},
+			checkResponse: func(t *testing.T, body string) {
+				assert.Contains(t, body, `"first_name":"John"`)
+				assert.Contains(t, body, `"email":"john@example.com"`)
+				assert.Contains(t, body, `"balance":0`)
+				// Should contain pagination metadata
+				assert.Contains(t, body, `"total_items":1`)
+				assert.Contains(t, body, `"has_next"`)
+				assert.Contains(t, body, `"has_previous"`)
+			},
+		},
+		{
+			name: "User with multiple accounts",
+			mockUsers: []*core.User{
+				{
+					ID:          1,
+					FirstName:   "Jane",
+					LastName:    "Smith",
+					Email:       "jane@example.com",
+					Balance:     nil, // Balance calculated on fly
+					Permissions: []string{"accounts_read"},
+					Accounts: []*core.Account{
+						{ID: 1, UserID: 1, Balance: 1000},
+						{ID: 2, UserID: 1, Balance: 1500},
+					},
+				},
+			},
+			checkResponse: func(t *testing.T, body string) {
+				assert.Contains(t, body, `"first_name":"Jane"`)
+				assert.Contains(t, body, `"balance":2500`)
+				// Should NOT contain accounts list in the main response
+				assert.NotContains(t, body, `"accounts":[`)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockSvc.ExpectedCalls = nil // Reset mock
+			mockSvc.On("GetUsers", mock.Anything, mock.Anything).Return(&storage.UsersPaginatedResult{Users: tt.mockUsers, TotalCount: 1}, nil)
+
+			req := httptest.NewRequest("GET", "/api/v1/users?page=1&limit=10", nil)
+			rr := httptest.NewRecorder()
+
+			api.GetUsersHandler(rr, req)
+
+			assert.Equal(t, http.StatusOK, rr.Code)
+
+			body := rr.Body.String()
+			tt.checkResponse(t, body)
+
+			mockSvc.AssertExpectations(t)
 		})
 	}
 }

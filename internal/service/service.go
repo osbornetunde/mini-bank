@@ -37,7 +37,7 @@ type Service interface {
 	ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error)
 	GetTransaction(ctx context.Context, reference string) (*core.Transaction, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
-	GetUsers(ctx context.Context) ([]*core.User, error)
+	GetUsers(ctx context.Context, pagination storage.PaginationParams) (*storage.UsersPaginatedResult, error)
 	GetUser(ctx context.Context, id int) (*core.User, error)
 	UpdateUser(ctx context.Context, id int, firstName string, lastName string, email string) (*core.User, error)
 	DeleteUser(ctx context.Context, id int) error
@@ -185,8 +185,8 @@ func (s *service) CreateUser(ctx context.Context, firstName string, lastName str
 	return res, err
 }
 
-func (s *service) GetUsers(ctx context.Context) ([]*core.User, error) {
-	return s.store.GetUsers(ctx)
+func (s *service) GetUsers(ctx context.Context, pagination storage.PaginationParams) (*storage.UsersPaginatedResult, error) {
+	return s.store.GetUsers(ctx, pagination)
 }
 
 func (s *service) GetUser(ctx context.Context, id int) (*core.User, error) {

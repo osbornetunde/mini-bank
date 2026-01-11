@@ -117,12 +117,12 @@ func (m *MockStorage) CreateUserWithAccount(ctx context.Context, firstName, last
 	return args.Get(0).(*core.User), args.Error(1)
 }
 
-func (m *MockStorage) GetUsers(ctx context.Context) ([]*core.User, error) {
-	args := m.Called(ctx)
+func (m *MockStorage) GetUsers(ctx context.Context, pagination storage.PaginationParams) (*storage.UsersPaginatedResult, error) {
+	args := m.Called(ctx, pagination)
 	if args.Get(0) == nil {
 		return nil, args.Error(1)
 	}
-	return args.Get(0).([]*core.User), args.Error(1)
+	return args.Get(0).(*storage.UsersPaginatedResult), args.Error(1)
 }
 
 func (m *MockStorage) GetUser(ctx context.Context, id int) (*core.User, error) {
@@ -264,5 +264,154 @@ func TestService_Transfer(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, fromAcc, resFrom)
 	assert.Equal(t, toAcc, resTo)
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_GetUsers_WithZeroAccounts(t *testing.T) {
+	mockStore := new(MockStorage)
+	mockEmail := new(MockEmailSender)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	s := New(mockStore, mockEmail, logger)
+
+	zeroBalance := int64(0)
+	usersData := []*core.User{
+		{
+			ID:          1,
+			FirstName:   "John",
+			LastName:    "Doe",
+			Email:       "john@example.com",
+			Balance:     &zeroBalance,
+			Permissions: []string{},
+			Accounts:    []*core.Account{}, // No accounts
+		},
+	}
+
+	mockStore.On("GetUsers", mock.Anything, mock.Anything).Return(&storage.UsersPaginatedResult{Users: usersData, TotalCount: 1}, nil)
+
+	result, err := s.GetUsers(context.Background(), storage.PaginationParams{Limit: 10, Offset: 0})
+
+	assert.NoError(t, err)
+	assert.Len(t, result.Users, 1)
+	assert.Equal(t, "John", result.Users[0].FirstName)
+	assert.Empty(t, result.Users[0].Accounts)
+	assert.Equal(t, int64(0), *result.Users[0].Balance)
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_GetUsers_WithMultipleAccounts(t *testing.T) {
+	mockStore := new(MockStorage)
+	mockEmail := new(MockEmailSender)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	s := New(mockStore, mockEmail, logger)
+
+	now := time.Now()
+	totalBalance := int64(2500) // 1000 + 1500
+	usersData := []*core.User{
+		{
+			ID:          1,
+			FirstName:   "Jane",
+			LastName:    "Smith",
+			Email:       "jane@example.com",
+			Balance:     &totalBalance,
+			Permissions: []string{"accounts_read"},
+			Accounts: []*core.Account{
+				{ID: 1, UserID: 1, Balance: 1000, OverdraftLimit: 500, CreatedAt: now},
+				{ID: 2, UserID: 1, Balance: 1500, OverdraftLimit: 0, CreatedAt: now},
+			},
+		},
+	}
+
+	mockStore.On("GetUsers", mock.Anything, mock.Anything).Return(&storage.UsersPaginatedResult{Users: usersData, TotalCount: 1}, nil)
+
+	result, err := s.GetUsers(context.Background(), storage.PaginationParams{Limit: 10, Offset: 0})
+
+	assert.NoError(t, err)
+	assert.Len(t, result.Users, 1)
+	assert.Len(t, result.Users[0].Accounts, 2)
+	assert.Equal(t, int64(2500), *result.Users[0].Balance)
+
+	// Verify individual account details
+	assert.Equal(t, int64(1000), result.Users[0].Accounts[0].Balance)
+	assert.Equal(t, int64(1500), result.Users[0].Accounts[1].Balance)
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_GetUsers_AggregatedBalanceWithNegative(t *testing.T) {
+	mockStore := new(MockStorage)
+	mockEmail := new(MockEmailSender)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	s := New(mockStore, mockEmail, logger)
+
+	now := time.Now()
+	// One account positive, one negative (overdraft) = net 700
+	totalBalance := int64(700) // 1000 + (-300)
+	usersData := []*core.User{
+		{
+			ID:          1,
+			FirstName:   "Bob",
+			LastName:    "Wilson",
+			Email:       "bob@example.com",
+			Balance:     &totalBalance,
+			Permissions: []string{},
+			Accounts: []*core.Account{
+				{ID: 1, UserID: 1, Balance: 1000, OverdraftLimit: 0, CreatedAt: now},
+				{ID: 2, UserID: 1, Balance: -300, OverdraftLimit: 500, CreatedAt: now}, // Overdraft
+			},
+		},
+	}
+
+	mockStore.On("GetUsers", mock.Anything, mock.Anything).Return(&storage.UsersPaginatedResult{Users: usersData, TotalCount: 1}, nil)
+
+	result, err := s.GetUsers(context.Background(), storage.PaginationParams{Limit: 10, Offset: 0})
+
+	assert.NoError(t, err)
+	assert.Len(t, result.Users, 1)
+	assert.Equal(t, int64(700), *result.Users[0].Balance)
+
+	// Verify negative balance account is included
+	assert.Equal(t, int64(-300), result.Users[0].Accounts[1].Balance)
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_GetUser_WithZeroAccounts(t *testing.T) {
+	mockStore := new(MockStorage)
+	mockEmail := new(MockEmailSender)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	s := New(mockStore, mockEmail, logger)
+
+	zeroBalance := int64(0)
+	userData := &core.User{
+		ID:          1,
+		FirstName:   "Alice",
+		LastName:    "Brown",
+		Email:       "alice@example.com",
+		Balance:     &zeroBalance,
+		Permissions: []string{},
+		Accounts:    nil,
+	}
+
+	mockStore.On("GetUser", mock.Anything, 1).Return(userData, nil)
+
+	user, err := s.GetUser(context.Background(), 1)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, user)
+	assert.Equal(t, "Alice", user.FirstName)
+	assert.Equal(t, int64(0), *user.Balance)
+	mockStore.AssertExpectations(t)
+}
+
+func TestService_GetUser_NotFound(t *testing.T) {
+	mockStore := new(MockStorage)
+	mockEmail := new(MockEmailSender)
+	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	s := New(mockStore, mockEmail, logger)
+
+	mockStore.On("GetUser", mock.Anything, 999).Return(nil, storage.ErrUserNotFound)
+
+	user, err := s.GetUser(context.Background(), 999)
+
+	assert.Nil(t, user)
+	assert.ErrorIs(t, err, storage.ErrUserNotFound)
 	mockStore.AssertExpectations(t)
 }
