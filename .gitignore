@@ -8,3 +8,8 @@
 # But keep example files
 !.env.example
 !.env.docker.example
+
+# Build outputs
+bin/
+tmp/
+build-errors.log
