@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"mini-bank/internal/core"
@@ -917,6 +918,47 @@ func (a *API) LoginHandler(w http.ResponseWriter, r *http.Request) {
 func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
+	// Extract and validate the expired JWT from Authorization header
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		httpError(w, http.StatusUnauthorized, "authorization header required")
+		return
+	}
+
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		httpError(w, http.StatusUnauthorized, "invalid authorization header")
+		return
+	}
+
+	tokenString := authHeader[7:]
+
+	// Parse JWT without validating expiration (but still validate signature)
+	parser := jwt.NewParser(jwt.WithoutClaimsValidation())
+	token, err := parser.Parse(tokenString, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
+		}
+		return []byte(a.jwtSecret), nil
+	})
+
+	if err != nil {
+		a.logger.Warn("failed to parse JWT for refresh", "err", err)
+		httpError(w, http.StatusUnauthorized, "invalid token")
+		return
+	}
+
+	claims, ok := token.Claims.(jwt.MapClaims)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "invalid token claims")
+		return
+	}
+
+	jwtUserID, ok := claims["user_id"].(float64)
+	if !ok {
+		httpError(w, http.StatusUnauthorized, "invalid user_id in token")
+		return
+	}
+
 	var request RefreshTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		httpError(w, http.StatusBadRequest, "invalid request")
@@ -926,7 +968,7 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	key := fmt.Sprintf("session:%s", request.RefreshToken)
 	userIDstr, err := a.redis.Get(ctx, key).Result()
 	if err == redis.Nil {
-		httpError(w, http.StatusUnauthorized, "invalid token")
+		httpError(w, http.StatusUnauthorized, "invalid refresh token")
 		return
 	} else if err != nil {
 		httpError(w, http.StatusInternalServerError, "failed to get token")
@@ -937,6 +979,13 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		a.logger.Error("invalid user ID in refresh token", "user_id", userIDstr, "err", err)
 		httpError(w, http.StatusInternalServerError, "invalid session data")
+		return
+	}
+
+	// Verify that the JWT user ID matches the refresh token's user ID
+	if int(jwtUserID) != userID {
+		a.logger.Warn("refresh token user ID mismatch", "jwt_user_id", int(jwtUserID), "refresh_user_id", userID)
+		httpError(w, http.StatusUnauthorized, "token mismatch")
 		return
 	}
 
