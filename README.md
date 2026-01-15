@@ -25,11 +25,17 @@ You can swap storage implementations (memory, file, postgres) without changing m
 ## Features
 - Account management
 - Transactions and transfers
+- **Tiered transaction fee system** with configurable fee structures:
+  - Flat, percentage, or combined fees
+  - Transaction-type specific fees (transfer, withdraw)
+  - Admin fee tier management API
+  - Fee calculator endpoint for transparency
 - Multiple storage backends:
   - in-memory (`internal/storage/memory`)
   - file-based (`internal/storage/file`)
   - Postgres-backed (`internal/storage/postgres`)
 - HTTP API and middleware layer under `internal/api`
+- Prometheus metrics for monitoring (including fee revenue tracking)
 
 ## Requirements
 - Go (1.18+ recommended)
@@ -105,6 +111,25 @@ If you want to contribute:
 - Keep changes small and focused; write tests for new logic.
 - Follow idiomatic Go practices and format code with `gofmt`.
 
+## Fee System
+
+The application includes a tiered transaction fee system. Fees are applied automatically to withdrawals and transfers based on configurable fee tiers.
+
+### Default Fee Structure
+- **Transfers**: $0.25-1% depending on amount
+- **Withdrawals**: $0.50-$2.00 + 0.25% for larger amounts
+
+### Fee Management Endpoints (Admin)
+- `POST /api/v1/admin/fees` - Create fee tier
+- `GET /api/v1/admin/fees` - List fee tiers
+- `PUT /api/v1/admin/fees/{id}` - Update fee tier
+- `DELETE /api/v1/admin/fees/{id}` - Delete fee tier
+
+### Fee Calculator (Public)
+- `GET /api/v1/fees/calculate?transaction_type=transfer&amount=10000` - Calculate fee for a transaction
+
+See `docs/IMPLEMENTATION-COMPLETE.md` for detailed usage examples.
+
 ## Future Work / TODO
 - [ ] Add tests for Account and transaction methods
 - [ ] Add API handler test with httptest
@@ -112,8 +137,9 @@ If you want to contribute:
 - [ ] Add concurrency-safe scheduled interest calculation
 - [ ] Add WebSocket updates for account changes
 - [ ] Dockerize the application
-- [ ] Implement Authentication
-- [ ] Add authentication middleware
+- [x] Implement Authentication
+- [x] Add authentication middleware
+- [x] Implement transaction fee system
 
 ## License
 This project does not include a license file in the tree above. If you plan to publish or share the repository, add a `LICENSE` file and choose an appropriate license.

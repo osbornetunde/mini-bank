@@ -19,6 +19,9 @@ const (
 
 	// Admin permissions
 	PermPermissionsManage = "permissions_manage"
+
+	// Fee permissions
+	PermFeesManage = "fees_manage"
 )
 
 // AllPermissions returns a slice of all available permissions.
@@ -34,6 +37,7 @@ func AllPermissions() []string {
 		PermUsersWrite,
 		PermUsersUpdate,
 		PermPermissionsManage,
+		PermFeesManage,
 	}
 }
 

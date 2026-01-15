@@ -218,7 +218,7 @@ func main() {
 			from := createdAccounts[tr.FromIndex]
 			to := createdAccounts[tr.ToIndex]
 			fmt.Printf("Transferring %d cents from Account %d to Account %d (%s)...\n", tr.Amount, from.ID, to.ID, tr.Reference)
-			_, _, err := repo.Transfer(ctx, from.ID, to.ID, tr.Amount, fmt.Sprintf("seed-transfer-%d-%s", i, tr.Reference))
+			_, _, err := repo.Transfer(ctx, from.ID, to.ID, tr.Amount, fmt.Sprintf("seed-transfer-%d-%s", i, tr.Reference), 0)
 			if err != nil {
 				log.Printf("Transfer failed: %v", err)
 			} else {
@@ -245,7 +245,7 @@ func main() {
 		if wd.AccountIndex < len(createdAccounts) {
 			acc := createdAccounts[wd.AccountIndex]
 			fmt.Printf("Withdrawing %d cents from Account %d (%s)...\n", wd.Amount, acc.ID, wd.Reference)
-			_, err := repo.Withdraw(ctx, acc.ID, wd.Amount, fmt.Sprintf("seed-withdraw-%d-%s", i, wd.Reference))
+			_, err := repo.Withdraw(ctx, acc.ID, wd.Amount, fmt.Sprintf("seed-withdraw-%d-%s", i, wd.Reference), 0)
 			if err != nil {
 				log.Printf("Withdrawal failed: %v", err)
 			} else {
@@ -287,7 +287,7 @@ func main() {
 	fmt.Println("Testing insufficient funds...")
 	if len(createdAccounts) > 2 {
 		charlieAccount := createdAccounts[2] // Charlie (User) has ~$750 balance
-		_, err := repo.Withdraw(ctx, charlieAccount.ID, 100000000, "seed-failure-insufficient-funds")
+		_, err := repo.Withdraw(ctx, charlieAccount.ID, 100000000, "seed-failure-insufficient-funds", 0)
 		if err != nil {
 			fmt.Printf("✓ Insufficient funds error caught (expected): %v\n", err)
 		} else {
@@ -300,7 +300,7 @@ func main() {
 	if len(createdAccounts) > 2 {
 		charlieAccount := createdAccounts[2] // Charlie has $0 overdraft limit
 		currentBalance := charlieAccount.Balance
-		_, err := repo.Withdraw(ctx, charlieAccount.ID, currentBalance+1000, "seed-failure-overdraft-exceeded")
+		_, err := repo.Withdraw(ctx, charlieAccount.ID, currentBalance+1000, "seed-failure-overdraft-exceeded", 0)
 		if err != nil {
 			fmt.Printf("✓ Overdraft limit error caught (expected): %v\n", err)
 		} else {
@@ -312,7 +312,7 @@ func main() {
 	fmt.Println("Testing transfer to invalid account...")
 	if len(createdAccounts) > 0 {
 		aliceAccount := createdAccounts[0]
-		_, _, err := repo.Transfer(ctx, aliceAccount.ID, 999999, 100, "seed-failure-invalid-account")
+		_, _, err := repo.Transfer(ctx, aliceAccount.ID, 999999, 100, "seed-failure-invalid-account", 0)
 		if err != nil {
 			fmt.Printf("✓ Invalid account error caught (expected): %v\n", err)
 		} else {
@@ -325,7 +325,7 @@ func main() {
 	if len(createdAccounts) > 1 {
 		charlieAccount := createdAccounts[2]
 		aliceAccount := createdAccounts[0]
-		_, _, err := repo.Transfer(ctx, charlieAccount.ID, aliceAccount.ID, 50000000, "seed-failure-insufficient-for-transfer")
+		_, _, err := repo.Transfer(ctx, charlieAccount.ID, aliceAccount.ID, 50000000, "seed-failure-insufficient-for-transfer", 0)
 		if err != nil {
 			fmt.Printf("✓ Insufficient balance error caught (expected): %v\n", err)
 		} else {
@@ -337,7 +337,7 @@ func main() {
 	fmt.Println("Testing negative amount withdrawal...")
 	if len(createdAccounts) > 0 {
 		aliceAccount := createdAccounts[0]
-		_, err := repo.Withdraw(ctx, aliceAccount.ID, -1000, "seed-failure-negative-amount")
+		_, err := repo.Withdraw(ctx, aliceAccount.ID, -1000, "seed-failure-negative-amount", 0)
 		if err != nil {
 			fmt.Printf("✓ Negative amount error caught (expected): %v\n", err)
 		} else {

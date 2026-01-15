@@ -85,8 +85,8 @@ func (m *MockStorage) GetTransaction(ctx context.Context, ref string) (*core.Tra
 	return args.Get(0).(*core.Transaction), args.Error(1)
 }
 
-func (m *MockStorage) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
-	args := m.Called(ctx, fromID, toID, amount, reference)
+func (m *MockStorage) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string, feeAmount int64) (*core.Account, *core.Account, error) {
+	args := m.Called(ctx, fromID, toID, amount, reference, feeAmount)
 	if args.Get(0) == nil {
 		return nil, nil, args.Error(2)
 	}
@@ -199,8 +199,53 @@ func (m *MockStorage) CreateAuditLog(ctx context.Context, log *core.AuditLog) er
 	return args.Error(0)
 }
 
-func (m *MockStorage) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
-	args := m.Called(ctx, accountID, amount, reference)
+func (m *MockStorage) CreateFeeTier(ctx context.Context, tier *core.FeeTier) (*core.FeeTier, error) {
+	args := m.Called(ctx, tier)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*core.FeeTier), args.Error(1)
+}
+
+func (m *MockStorage) GetApplicableFeeTier(ctx context.Context, transactionType string, amount int64) (*core.FeeTier, error) {
+	args := m.Called(ctx, transactionType, amount)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*core.FeeTier), args.Error(1)
+}
+
+func (m *MockStorage) ListFeeTiers(ctx context.Context, transactionType *string, activeOnly bool) ([]*core.FeeTier, error) {
+	args := m.Called(ctx, transactionType, activeOnly)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*core.FeeTier), args.Error(1)
+}
+
+func (m *MockStorage) UpdateFeeTier(ctx context.Context, tier *core.FeeTier) error {
+	args := m.Called(ctx, tier)
+	return args.Error(0)
+}
+
+func (m *MockStorage) DeleteFeeTier(ctx context.Context, id int) error {
+	args := m.Called(ctx, id)
+	return args.Error(0)
+}
+
+func (m *MockStorage) ListUserAccounts(ctx context.Context, userID int) ([]*core.Account, error) {
+	args := m.Called(ctx, userID)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]*core.Account), args.Error(1)
+}
+
+func (m *MockStorage) Withdraw(ctx context.Context, accountID int, amount int64, reference string, feeAmount int64) (*core.Account, error) {
+	args := m.Called(ctx, accountID, amount, reference, feeAmount)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
 	return args.Get(0).(*core.Account), args.Error(1)
 }
 
@@ -253,17 +298,23 @@ func TestService_Transfer(t *testing.T) {
 	amount := int64(100)
 	ref := "test-ref"
 
-	fromAcc := &core.Account{ID: fromID, Balance: 900}
-	toAcc := &core.Account{ID: toID, Balance: 1100}
+	fromAcc := &core.Account{ID: fromID, UserID: 1, Balance: 900}
+	toAcc := &core.Account{ID: toID, UserID: 2, Balance: 1100}
 
-	mockStore.On("Transfer", mock.Anything, fromID, toID, amount, ref).
+	// Mock fee calculation - returns no fee rule found (backwards compatible)
+	mockStore.On("GetApplicableFeeTier", mock.Anything, "transfer", amount).
+		Return(nil, storage.ErrFeeRuleNotFound)
+	mockStore.On("Transfer", mock.Anything, fromID, toID, amount, ref, int64(0)).
 		Return(fromAcc, toAcc, nil)
+	mockStore.On("CreateAuditLog", mock.Anything, mock.Anything).Return(nil)
 
-	resFrom, resTo, err := s.Transfer(context.Background(), fromID, toID, amount, ref)
+	result, err := s.Transfer(context.Background(), fromID, toID, amount, ref)
 
 	assert.NoError(t, err)
-	assert.Equal(t, fromAcc, resFrom)
-	assert.Equal(t, toAcc, resTo)
+	assert.Equal(t, fromAcc, result.FromAccount)
+	assert.Equal(t, toAcc, result.ToAccount)
+	assert.Equal(t, int64(0), result.FeeAmount)
+	assert.Equal(t, ref, result.Reference)
 	mockStore.AssertExpectations(t)
 }
 

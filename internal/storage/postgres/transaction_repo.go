@@ -43,7 +43,7 @@ func scanAccount(row scanner) (*core.Account, error) {
 
 func scanTransaction(row scanner) (*core.Transaction, error) {
 	var t core.Transaction
-	if err := row.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &t.Reference, &t.FromAccountID, &t.ToAccountID, &t.Timestamp); err != nil {
+	if err := row.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &t.Reference, &t.FromAccountID, &t.ToAccountID, &t.Timestamp, &t.FeeAmount, &t.ParentTransactionID, &t.IsFeeTransaction); err != nil {
 		return nil, err
 	}
 	return &t, nil
@@ -130,7 +130,7 @@ func (r *Repo) Deposit(ctx context.Context, accountID int, amount int64, referen
 }
 
 // Withdraw performs an atomic withdrawal and returns the updated account.
-func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
+func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, reference string, feeAmount int64) (*core.Account, error) {
 	if amount <= 0 {
 		return nil, errors.New("amount must be positive")
 	}
@@ -141,10 +141,13 @@ func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, refere
 	}
 	defer tx.Rollback()
 
+	// Deduct total amount (amount + fee) from account
+	totalDeduction := amount + feeAmount
+
 	// Attempt to debit if sufficient funds exist; RETURNING gives new account details
 	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance + overdraft_limit >= $1 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var acc core.Account
-	if err := tx.QueryRowContext(ctx, debit, amount, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.OverdraftLimit, &acc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, debit, totalDeduction, accountID).Scan(&acc.ID, &acc.UserID, &acc.Balance, &acc.OverdraftLimit, &acc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			// The atomic update failed. Let's find out why.
 			var exists bool
@@ -161,10 +164,20 @@ func (r *Repo) Withdraw(ctx context.Context, accountID int, amount int64, refere
 		return nil, err
 	}
 
-	// Insert transaction record
-	const ins = `INSERT INTO transactions (account_id, type, amount, reference, created_at) VALUES ($1, $2, $3, $4, $5)`
-	if _, err := tx.ExecContext(ctx, ins, accountID, "withdraw", amount, nullIfEmpty(reference), time.Now().UTC()); err != nil {
+	// Insert main withdrawal transaction with fee_amount
+	const ins = `INSERT INTO transactions (account_id, type, amount, reference, fee_amount, is_fee_transaction, created_at) VALUES ($1, $2, $3, $4, $5, FALSE, $6) RETURNING id`
+	var transactionID int64
+	if err := tx.QueryRowContext(ctx, ins, accountID, "withdraw", amount, nullIfEmpty(reference), feeAmount, time.Now().UTC()).Scan(&transactionID); err != nil {
 		return nil, err
+	}
+
+	// If there's a fee, create a separate fee transaction
+	if feeAmount > 0 {
+		feeReference := fmt.Sprintf("%s-fee", reference)
+		const feeIns = `INSERT INTO transactions (account_id, type, amount, reference, parent_transaction_id, fee_amount, is_fee_transaction, created_at) VALUES ($1, 'fee', $2, $3, $4, 0, TRUE, $5)`
+		if _, err := tx.ExecContext(ctx, feeIns, accountID, feeAmount, feeReference, transactionID, time.Now().UTC()); err != nil {
+			return nil, fmt.Errorf("failed to insert fee transaction: %w", err)
+		}
 	}
 
 	// commit
@@ -186,7 +199,7 @@ func (r *Repo) RecordTransaction(ctx context.Context, txn *core.Transaction) err
 
 // ListTransactions returns transactions for an account
 func (r *Repo) ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error) {
-	const q = `SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at FROM transactions WHERE account_id = $1 ORDER BY created_at DESC`
+	const q = `SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at, fee_amount, parent_transaction_id, is_fee_transaction FROM transactions WHERE account_id = $1 ORDER BY created_at DESC`
 	rows, err := r.db.QueryContext(ctx, q, accountID)
 	if err != nil {
 		return nil, err
@@ -199,7 +212,8 @@ func (r *Repo) ListTransactions(ctx context.Context, accountID int) ([]*core.Tra
 		var from sql.NullInt64
 		var to sql.NullInt64
 		var ref sql.NullString
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &ref, &from, &to, &t.Timestamp); err != nil {
+		var parentTxID sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &ref, &from, &to, &t.Timestamp, &t.FeeAmount, &parentTxID, &t.IsFeeTransaction); err != nil {
 			return nil, err
 		}
 		if ref.Valid {
@@ -212,6 +226,10 @@ func (r *Repo) ListTransactions(ctx context.Context, accountID int) ([]*core.Tra
 		if to.Valid {
 			v := int(to.Int64)
 			t.ToAccountID = &v
+		}
+		if parentTxID.Valid {
+			v := parentTxID.Int64
+			t.ParentTransactionID = &v
 		}
 		res = append(res, &t)
 	}
@@ -268,7 +286,7 @@ func (r *Repo) ListTransactionsPaginated(ctx context.Context, accountID int, fil
 	args = append(args, pagination.Offset)
 
 	query := fmt.Sprintf(`
-		SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at
+		SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at, fee_amount, parent_transaction_id, is_fee_transaction
 		FROM transactions
 		%s
 		ORDER BY created_at DESC
@@ -287,7 +305,8 @@ func (r *Repo) ListTransactionsPaginated(ctx context.Context, accountID int, fil
 		var from sql.NullInt64
 		var to sql.NullInt64
 		var ref sql.NullString
-		if err := rows.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &ref, &from, &to, &t.Timestamp); err != nil {
+		var parentTxID sql.NullInt64
+		if err := rows.Scan(&t.ID, &t.AccountID, &t.Type, &t.Amount, &ref, &from, &to, &t.Timestamp, &t.FeeAmount, &parentTxID, &t.IsFeeTransaction); err != nil {
 			return nil, fmt.Errorf("failed to scan transaction: %w", err)
 		}
 		if ref.Valid {
@@ -300,6 +319,10 @@ func (r *Repo) ListTransactionsPaginated(ctx context.Context, accountID int, fil
 		if to.Valid {
 			v := int(to.Int64)
 			t.ToAccountID = &v
+		}
+		if parentTxID.Valid {
+			v := parentTxID.Int64
+			t.ParentTransactionID = &v
 		}
 		transactions = append(transactions, &t)
 	}
@@ -335,8 +358,8 @@ func (r *Repo) UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit
 	return acc, nil
 }
 
-// Transfer performs a transactional transfer between two accounts.
-func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
+// Transfer performs a transactional transfer between two accounts with optional fee.
+func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string, feeAmount int64) (*core.Account, *core.Account, error) {
 	if amount <= 0 {
 		return nil, nil, errors.New("amount must be positive")
 	}
@@ -349,10 +372,13 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 	}
 	defer tx.Rollback()
 
+	// Deduct total amount (amount + fee) from sender
+	totalDeduction := amount + feeAmount
+
 	// Withdraw from sender
 	const debit = `UPDATE accounts SET balance = balance - $1 WHERE id = $2 AND balance + overdraft_limit >= $1 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var fromAcc core.Account
-	if err := tx.QueryRowContext(ctx, debit, amount, fromID).Scan(&fromAcc.ID, &fromAcc.UserID, &fromAcc.Balance, &fromAcc.OverdraftLimit, &fromAcc.CreatedAt); err != nil {
+	if err := tx.QueryRowContext(ctx, debit, totalDeduction, fromID).Scan(&fromAcc.ID, &fromAcc.UserID, &fromAcc.Balance, &fromAcc.OverdraftLimit, &fromAcc.CreatedAt); err != nil {
 		if err == sql.ErrNoRows {
 			// This could mean insufficient funds or the account doesn't exist.
 			// A more robust implementation could check for existence first.
@@ -361,7 +387,7 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 		return nil, nil, err
 	}
 
-	// Deposit to receiver
+	// Deposit to receiver (only the transfer amount, not the fee)
 	const credit = `UPDATE accounts SET balance = balance + $1 WHERE id = $2 RETURNING id, user_id, balance, overdraft_limit, created_at`
 	var toAcc core.Account
 	if err := tx.QueryRowContext(ctx, credit, amount, toID).Scan(&toAcc.ID, &toAcc.UserID, &toAcc.Balance, &toAcc.OverdraftLimit, &toAcc.CreatedAt); err != nil {
@@ -371,18 +397,28 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 		return nil, nil, err
 	}
 
-	// Record transaction for sender
-	const insFrom = `INSERT INTO transactions (account_id, type, amount, to_account_id, reference, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5)`
+	// Record transaction for sender with fee_amount
+	const insFrom = `INSERT INTO transactions (account_id, type, amount, to_account_id, reference, fee_amount, is_fee_transaction, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5, FALSE, $6) RETURNING id`
 	senderRef := reference + "-from"
-	if _, err := tx.ExecContext(ctx, insFrom, fromID, amount, toID, nullIfEmpty(senderRef), time.Now().UTC()); err != nil {
+	var senderTransactionID int64
+	if err := tx.QueryRowContext(ctx, insFrom, fromID, amount, toID, nullIfEmpty(senderRef), feeAmount, time.Now().UTC()).Scan(&senderTransactionID); err != nil {
 		return nil, nil, err
 	}
 
 	// Record transaction for receiver
-	const insTo = `INSERT INTO transactions (account_id, type, amount, from_account_id, reference, created_at) VALUES ($1, 'transfer', $2, $3, $4, $5)`
+	const insTo = `INSERT INTO transactions (account_id, type, amount, from_account_id, reference, fee_amount, is_fee_transaction, created_at) VALUES ($1, 'transfer', $2, $3, $4, 0, FALSE, $5)`
 	receiverRef := reference + "-to"
 	if _, err := tx.ExecContext(ctx, insTo, toID, amount, fromID, nullIfEmpty(receiverRef), time.Now().UTC()); err != nil {
 		return nil, nil, err
+	}
+
+	// If there's a fee, create a separate fee transaction for the sender
+	if feeAmount > 0 {
+		feeReference := fmt.Sprintf("%s-fee", reference)
+		const feeIns = `INSERT INTO transactions (account_id, type, amount, reference, parent_transaction_id, fee_amount, is_fee_transaction, created_at) VALUES ($1, 'fee', $2, $3, $4, 0, TRUE, $5)`
+		if _, err := tx.ExecContext(ctx, feeIns, fromID, feeAmount, feeReference, senderTransactionID, time.Now().UTC()); err != nil {
+			return nil, nil, fmt.Errorf("failed to insert fee transaction: %w", err)
+		}
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -393,19 +429,22 @@ func (r *Repo) Transfer(ctx context.Context, fromID, toID int, amount int64, ref
 }
 
 // Payment performs a deposit or withdrawal and returns the updated account.
+// Note: This is a legacy method that doesn't support fees. For fee-enabled withdrawals,
+// use the Withdraw method directly from the service layer.
 func (r *Repo) Payment(ctx context.Context, accountID int, amount int64, paymentType storage.PaymentType, reference string) (*core.Account, error) {
 	switch paymentType {
 	case storage.Deposit:
 		return r.Deposit(ctx, accountID, amount, reference)
 	case storage.Withdraw:
-		return r.Withdraw(ctx, accountID, amount, reference)
+		// Payment method doesn't charge fees - pass 0 for feeAmount
+		return r.Withdraw(ctx, accountID, amount, reference, 0)
 	default:
 		return nil, fmt.Errorf("unknown payment type: %s", paymentType)
 	}
 }
 
 func (r *Repo) GetTransaction(ctx context.Context, ref string) (*core.Transaction, error) {
-	const q = `SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at FROM transactions WHERE reference = $1`
+	const q = `SELECT id, account_id, type, amount, reference, from_account_id, to_account_id, created_at, fee_amount, parent_transaction_id, is_fee_transaction FROM transactions WHERE reference = $1`
 
 	row := r.db.QueryRowContext(ctx, q, ref)
 	trx, err := scanTransaction(row)

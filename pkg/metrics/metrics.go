@@ -46,4 +46,14 @@ var (
 		Name: "rejected_transactions_total",
 		Help: "Total number of transactions rejected due to validation failures.",
 	}, []string{"reason", "type"})
+
+	FeeRevenue = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "bank_fee_revenue_total",
+		Help: "Total fee revenue collected in cents.",
+	}, []string{"transaction_type"})
+
+	FeeTransactionsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "bank_fee_transactions_total",
+		Help: "Total number of fee transactions created.",
+	})
 )

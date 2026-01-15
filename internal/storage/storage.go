@@ -17,6 +17,7 @@ var (
 	ErrInvalidCredentials  = errors.New("invalid credentials")
 	ErrInvalidResetToken   = errors.New("invalid or expired reset token")
 	ErrAccountLocked       = errors.New("account temporarily locked due to multiple failed login attempts")
+	ErrFeeRuleNotFound     = errors.New("fee rule not found")
 )
 
 type PaymentType string
@@ -65,7 +66,7 @@ type Storage interface {
 	ListTransactionsPaginated(ctx context.Context, accountID int, filters TransactionFilters, pagination PaginationParams) (*PaginatedResult, error)
 	GetTransaction(ctx context.Context, ref string) (*core.Transaction, error)
 
-	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)
+	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string, feeAmount int64) (*core.Account, *core.Account, error)
 	Payment(ctx context.Context, accountID int, amount int64, paymentType PaymentType, reference string) (*core.Account, error)
 	CreateUser(ctx context.Context, firstName string, lastName string, email string, password string) (*core.User, error)
 	CreateUserWithAccount(ctx context.Context, firstName string, lastName string, email string, password string, initialBalance int64) (*core.User, error)
@@ -85,5 +86,13 @@ type Storage interface {
 	ResetPasswordTx(ctx context.Context, tokenHash string, hashedPassword string) (userID int, err error)
 
 	CreateAuditLog(ctx context.Context, log *core.AuditLog) error
-	Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error)
+	Withdraw(ctx context.Context, accountID int, amount int64, reference string, feeAmount int64) (*core.Account, error)
+
+	// Fee tier management
+	CreateFeeTier(ctx context.Context, tier *core.FeeTier) (*core.FeeTier, error)
+	GetApplicableFeeTier(ctx context.Context, transactionType string, amount int64) (*core.FeeTier, error)
+	ListFeeTiers(ctx context.Context, transactionType *string, activeOnly bool) ([]*core.FeeTier, error)
+	UpdateFeeTier(ctx context.Context, tier *core.FeeTier) error
+	DeleteFeeTier(ctx context.Context, id int) error
+	ListUserAccounts(ctx context.Context, userID int) ([]*core.Account, error)
 }

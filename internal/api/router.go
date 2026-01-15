@@ -135,5 +135,14 @@ func (a *API) Router() http.Handler {
 	mux.Handle("POST /api/v1/password-reset/request", a.RateLimitMiddleware(asHandler(a.RequestPasswordResetHandler), 5, time.Hour))
 	mux.Handle("POST /api/v1/password-reset/confirm", a.RateLimitMiddleware(asHandler(a.ResetPasswordHandler), 5, time.Hour))
 
+	// Fee management routes (admin only)
+	mux.Handle("POST /api/v1/admin/fees", a.withMiddleware(core.PermFeesManage, a.CreateFeeTierHandler))
+	mux.Handle("GET /api/v1/admin/fees", a.withMiddleware(core.PermFeesManage, a.ListFeeTiersHandler))
+	mux.Handle("PUT /api/v1/admin/fees/{id}", a.withMiddleware(core.PermFeesManage, a.UpdateFeeTierHandler))
+	mux.Handle("DELETE /api/v1/admin/fees/{id}", a.withMiddleware(core.PermFeesManage, a.DeleteFeeTierHandler))
+
+	// Fee calculator (public for transparency)
+	mux.Handle("GET /api/v1/fees/calculate", asHandler(a.CalculateFeeHandler))
+
 	return mux
 }

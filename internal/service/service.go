@@ -31,7 +31,7 @@ type Service interface {
 	ListAccounts(ctx context.Context) ([]*core.Account, error)
 	ListUserAccounts(ctx context.Context, userID int) ([]*core.Account, error)
 	UpdateOverdraftLimit(ctx context.Context, accountID int, newLimit int64) (*core.Account, error)
-	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error)
+	Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.TransferResult, error)
 	Payment(ctx context.Context, accountID int, amount int64, pType storage.PaymentType, reference string) (*core.Account, error)
 	ListTransactions(ctx context.Context, accountID int) ([]*core.Transaction, error)
 	ListTransactionsPaginated(ctx context.Context, accountID int, filters storage.TransactionFilters, pagination storage.PaginationParams) (*storage.PaginatedResult, error)
@@ -45,7 +45,14 @@ type Service interface {
 	Login(ctx context.Context, email string, password string) (*core.User, error)
 	RequestPasswordReset(ctx context.Context, email string) (token string, err error)
 	ResetPassword(ctx context.Context, token string, newPassword string) (*core.User, error)
-	Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error)
+	Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.WithdrawResult, error)
+
+	// Fee management
+	CalculateFee(ctx context.Context, transactionType string, amount int64) (*core.FeeCalculation, error)
+	CreateFeeTier(ctx context.Context, tier *core.FeeTier) (*core.FeeTier, error)
+	ListFeeTiers(ctx context.Context, transactionType *string, activeOnly bool) ([]*core.FeeTier, error)
+	UpdateFeeTier(ctx context.Context, tier *core.FeeTier) error
+	DeleteFeeTier(ctx context.Context, id int) error
 }
 
 type service struct {
@@ -131,17 +138,51 @@ func (s *service) UpdateOverdraftLimit(ctx context.Context, accountID int, newLi
 	return s.store.UpdateOverdraftLimit(ctx, accountID, newLimit)
 }
 
-func (s *service) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.Account, *core.Account, error) {
-	from, to, err := s.store.Transfer(ctx, fromID, toID, amount, reference)
+func (s *service) Transfer(ctx context.Context, fromID, toID int, amount int64, reference string) (*core.TransferResult, error) {
+	// Calculate applicable fee
+	feeCalc, err := s.CalculateFee(ctx, "transfer", amount)
+	if err != nil {
+		s.logger.Error("failed to calculate fee", "err", err)
+		// Continue without fee rather than failing the transaction
+		feeCalc = &core.FeeCalculation{FeeAmount: 0}
+	}
+
+	from, to, err := s.store.Transfer(ctx, fromID, toID, amount, reference, feeCalc.FeeAmount)
 	status := "success"
 	if err != nil {
 		status = "failure"
 	}
 	metrics.TransactionTotal.WithLabelValues("transfer", status).Inc()
-	if err == nil {
-		metrics.TransactionAmount.WithLabelValues("transfer").Add(float64(amount))
+	if err != nil {
+		return nil, err
 	}
-	return from, to, err
+
+	metrics.TransactionAmount.WithLabelValues("transfer").Add(float64(amount))
+
+	// Track fee revenue
+	if feeCalc.FeeAmount > 0 {
+		metrics.FeeRevenue.WithLabelValues("transfer").Add(float64(feeCalc.FeeAmount))
+		metrics.FeeTransactionsTotal.Inc()
+		metrics.TransactionAmount.WithLabelValues("fee").Add(float64(feeCalc.FeeAmount))
+	}
+
+	// Audit log
+	if logErr := s.logActivity(ctx, from.UserID, "transfer", map[string]interface{}{
+		"from_id":   fromID,
+		"to_id":     toID,
+		"amount":    amount,
+		"fee":       feeCalc.FeeAmount,
+		"reference": reference,
+	}); logErr != nil {
+		s.logger.Error("failed to log audit", "err", logErr)
+	}
+
+	return &core.TransferResult{
+		FromAccount: from,
+		ToAccount:   to,
+		FeeAmount:   feeCalc.FeeAmount,
+		Reference:   reference,
+	}, nil
 }
 
 func (s *service) Payment(ctx context.Context, accountID int, amount int64, pType storage.PaymentType, reference string) (*core.Account, error) {
@@ -334,7 +375,50 @@ func (s *service) ResetPassword(ctx context.Context, token string, newPassword s
 	return user, nil
 }
 
-func (s *service) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.Account, error) {
-	acc, err := s.store.Withdraw(ctx, accountID, amount, reference)
-	return acc, err
+func (s *service) Withdraw(ctx context.Context, accountID int, amount int64, reference string) (*core.WithdrawResult, error) {
+	if amount <= 0 {
+		return nil, errors.New("amount must be greater than 0")
+	}
+
+	// Calculate applicable fee
+	feeCalc, err := s.CalculateFee(ctx, "withdraw", amount)
+	if err != nil {
+		s.logger.Error("failed to calculate fee", "err", err)
+		// Continue without fee rather than failing the transaction
+		feeCalc = &core.FeeCalculation{FeeAmount: 0}
+	}
+
+	// Withdraw with fee
+	acc, err := s.store.Withdraw(ctx, accountID, amount, reference, feeCalc.FeeAmount)
+	if err != nil {
+		metrics.TransactionTotal.WithLabelValues("withdraw", "failure").Inc()
+		return nil, err
+	}
+
+	// Track metrics
+	metrics.TransactionTotal.WithLabelValues("withdraw", "success").Inc()
+	metrics.TransactionAmount.WithLabelValues("withdraw").Add(float64(amount))
+
+	// Track fee revenue
+	if feeCalc.FeeAmount > 0 {
+		metrics.FeeRevenue.WithLabelValues("withdraw").Add(float64(feeCalc.FeeAmount))
+		metrics.FeeTransactionsTotal.Inc()
+		metrics.TransactionAmount.WithLabelValues("fee").Add(float64(feeCalc.FeeAmount))
+	}
+
+	// Audit log
+	if logErr := s.logActivity(ctx, acc.UserID, "withdraw", map[string]interface{}{
+		"account_id": accountID,
+		"amount":     amount,
+		"fee":        feeCalc.FeeAmount,
+		"reference":  reference,
+	}); logErr != nil {
+		s.logger.Error("failed to log audit", "err", logErr)
+	}
+
+	return &core.WithdrawResult{
+		Account:   acc,
+		FeeAmount: feeCalc.FeeAmount,
+		Reference: reference,
+	}, nil
 }

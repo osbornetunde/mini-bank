@@ -162,6 +162,7 @@ type transferResponse struct {
 	FromAccount *getAccountResponse `json:"from_account"`
 	ToAccount   *getAccountResponse `json:"to_account"`
 	Reference   string              `json:"reference,omitempty"`
+	Fee         int64               `json:"fee"`
 }
 
 type transferRequest struct {
@@ -256,6 +257,7 @@ type WithdrawRequest struct {
 type WithdrawResponse struct {
 	Balance   int64  `json:"balance"`
 	Reference string `json:"reference"`
+	Fee       int64  `json:"fee"`
 }
 
 func (a *API) CreateAccountHandler(w http.ResponseWriter, r *http.Request) {
@@ -444,7 +446,7 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 
 	reference := uuid.NewString()
 
-	fromAcc, toAcc, err := a.service.Transfer(ctx, req.FromID, req.ToID, req.Amount, reference)
+	result, err := a.service.Transfer(ctx, req.FromID, req.ToID, req.Amount, reference)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
@@ -459,9 +461,10 @@ func (a *API) TransferHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := transferResponse{
-		FromAccount: toAccountResponse(fromAcc),
-		ToAccount:   toAccountResponse(toAcc),
-		Reference:   reference,
+		FromAccount: toAccountResponse(result.FromAccount),
+		ToAccount:   toAccountResponse(result.ToAccount),
+		Reference:   result.Reference,
+		Fee:         result.FeeAmount,
 	}
 
 	jsonResponse(w, http.StatusOK, resp)
@@ -1201,7 +1204,7 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if transaction with this reference already exists (idempotency)
 	existingTx, err := a.service.GetTransaction(ctx, req.Reference)
 	if err == nil {
-		// Transaction already exists - return current balance (idempotent behavior)
+		// Transaction already exists - return current balance with stored fee (idempotent behavior)
 		account, err := a.service.GetAccount(ctx, accountID)
 		if err != nil {
 			a.logger.Error("failed to get account for existing transaction", "err", err)
@@ -1211,6 +1214,7 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 		res := WithdrawResponse{
 			Balance:   account.Balance,
 			Reference: existingTx.Reference,
+			Fee:       existingTx.FeeAmount, // Use stored fee from original transaction
 		}
 		jsonResponse(w, http.StatusOK, res)
 		return
@@ -1223,7 +1227,7 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := a.service.Withdraw(ctx, accountID, req.Amount, req.Reference)
+	result, err := a.service.Withdraw(ctx, accountID, req.Amount, req.Reference)
 	if err != nil {
 		switch {
 		case errors.Is(err, storage.ErrAccountNotFound):
@@ -1237,8 +1241,9 @@ func (a *API) WithdrawHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	res := WithdrawResponse{
-		Balance:   response.Balance,
-		Reference: req.Reference,
+		Balance:   result.Account.Balance,
+		Reference: result.Reference,
+		Fee:       result.FeeAmount,
 	}
 	jsonResponse(w, http.StatusOK, res)
 }
@@ -1318,4 +1323,235 @@ func (a *API) GetUserPermissionsHandler(w http.ResponseWriter, r *http.Request) 
 		UserID:      userID,
 		Permissions: user.Permissions,
 	})
+}
+
+// Fee management handlers
+
+type CreateFeeTierRequest struct {
+	TransactionType string   `json:"transaction_type"`
+	MinAmount       int64    `json:"min_amount"`
+	MaxAmount       *int64   `json:"max_amount"`
+	FeeType         string   `json:"fee_type"`
+	FlatFee         *int64   `json:"flat_fee"`
+	PercentageFee   *float64 `json:"percentage_fee"`
+}
+
+func (r *CreateFeeTierRequest) Validate() error {
+	if r.TransactionType != "transfer" && r.TransactionType != "withdraw" {
+		return errors.New("transaction_type must be 'transfer' or 'withdraw'")
+	}
+	if r.MinAmount < 0 {
+		return errors.New("min_amount must be non-negative")
+	}
+	if r.MaxAmount != nil && *r.MaxAmount <= r.MinAmount {
+		return errors.New("max_amount must be greater than min_amount")
+	}
+	if r.FeeType != "flat" && r.FeeType != "percentage" && r.FeeType != "combined" {
+		return errors.New("fee_type must be 'flat', 'percentage', or 'combined'")
+	}
+	if (r.FeeType == "flat" || r.FeeType == "combined") && r.FlatFee == nil {
+		return errors.New("flat_fee is required for flat and combined fee types")
+	}
+	if (r.FeeType == "percentage" || r.FeeType == "combined") && r.PercentageFee == nil {
+		return errors.New("percentage_fee is required for percentage and combined fee types")
+	}
+	if r.FlatFee != nil && *r.FlatFee < 0 {
+		return errors.New("flat_fee must be non-negative")
+	}
+	if r.PercentageFee != nil && (*r.PercentageFee < 0 || *r.PercentageFee > 1) {
+		return errors.New("percentage_fee must be between 0 and 1")
+	}
+	return nil
+}
+
+func (a *API) CreateFeeTierHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req CreateFeeTierRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	tier := &core.FeeTier{
+		TransactionType: req.TransactionType,
+		MinAmount:       req.MinAmount,
+		MaxAmount:       req.MaxAmount,
+		FeeType:         core.FeeType(req.FeeType),
+		FlatFee:         req.FlatFee,
+		PercentageFee:   req.PercentageFee,
+		IsActive:        true,
+	}
+
+	createdTier, err := a.service.CreateFeeTier(ctx, tier)
+	if err != nil {
+		a.logger.Error("failed to create fee tier", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to create fee tier")
+		return
+	}
+
+	jsonResponse(w, http.StatusCreated, createdTier)
+}
+
+func (a *API) ListFeeTiersHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	transactionType := r.URL.Query().Get("transaction_type")
+	activeOnly := r.URL.Query().Get("active_only") == "true"
+
+	var txType *string
+	if transactionType != "" {
+		if transactionType != "transfer" && transactionType != "withdraw" {
+			httpError(w, http.StatusBadRequest, "transaction_type must be 'transfer' or 'withdraw'")
+			return
+		}
+		txType = &transactionType
+	}
+
+	tiers, err := a.service.ListFeeTiers(ctx, txType, activeOnly)
+	if err != nil {
+		a.logger.Error("failed to list fee tiers", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to list fee tiers")
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]interface{}{"fee_tiers": tiers})
+}
+
+type UpdateFeeTierRequest struct {
+	TransactionType string   `json:"transaction_type"`
+	MinAmount       int64    `json:"min_amount"`
+	MaxAmount       *int64   `json:"max_amount"`
+	FeeType         string   `json:"fee_type"`
+	FlatFee         *int64   `json:"flat_fee"`
+	PercentageFee   *float64 `json:"percentage_fee"`
+	IsActive        bool     `json:"is_active"`
+}
+
+func (r *UpdateFeeTierRequest) Validate() error {
+	if r.TransactionType != "transfer" && r.TransactionType != "withdraw" {
+		return errors.New("transaction_type must be 'transfer' or 'withdraw'")
+	}
+	if r.MinAmount < 0 {
+		return errors.New("min_amount must be non-negative")
+	}
+	if r.MaxAmount != nil && *r.MaxAmount <= r.MinAmount {
+		return errors.New("max_amount must be greater than min_amount")
+	}
+	if r.FeeType != "flat" && r.FeeType != "percentage" && r.FeeType != "combined" {
+		return errors.New("fee_type must be 'flat', 'percentage', or 'combined'")
+	}
+	if (r.FeeType == "flat" || r.FeeType == "combined") && r.FlatFee == nil {
+		return errors.New("flat_fee is required for flat and combined fee types")
+	}
+	if (r.FeeType == "percentage" || r.FeeType == "combined") && r.PercentageFee == nil {
+		return errors.New("percentage_fee is required for percentage and combined fee types")
+	}
+	if r.FlatFee != nil && *r.FlatFee < 0 {
+		return errors.New("flat_fee must be non-negative")
+	}
+	if r.PercentageFee != nil && (*r.PercentageFee < 0 || *r.PercentageFee > 1) {
+		return errors.New("percentage_fee must be between 0 and 1")
+	}
+	return nil
+}
+
+func (a *API) UpdateFeeTierHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	idStr := r.PathValue("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		httpError(w, http.StatusBadRequest, "invalid fee tier id")
+		return
+	}
+
+	var req UpdateFeeTierRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httpError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := req.Validate(); err != nil {
+		httpError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	tier := &core.FeeTier{
+		ID:              id,
+		TransactionType: req.TransactionType,
+		MinAmount:       req.MinAmount,
+		MaxAmount:       req.MaxAmount,
+		FeeType:         core.FeeType(req.FeeType),
+		FlatFee:         req.FlatFee,
+		PercentageFee:   req.PercentageFee,
+		IsActive:        req.IsActive,
+	}
+
+	if err := a.service.UpdateFeeTier(ctx, tier); err != nil {
+		if errors.Is(err, storage.ErrFeeRuleNotFound) {
+			httpError(w, http.StatusNotFound, "fee tier not found")
+			return
+		}
+		a.logger.Error("failed to update fee tier", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to update fee tier")
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"message": "fee tier updated successfully"})
+}
+
+func (a *API) DeleteFeeTierHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	idStr := r.PathValue("id")
+	id, err := strconv.Atoi(idStr)
+	if err != nil || id <= 0 {
+		httpError(w, http.StatusBadRequest, "invalid fee tier id")
+		return
+	}
+
+	if err := a.service.DeleteFeeTier(ctx, id); err != nil {
+		if errors.Is(err, storage.ErrFeeRuleNotFound) {
+			httpError(w, http.StatusNotFound, "fee tier not found")
+			return
+		}
+		a.logger.Error("failed to delete fee tier", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to delete fee tier")
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, map[string]string{"message": "fee tier deleted successfully"})
+}
+
+func (a *API) CalculateFeeHandler(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	transactionType := r.URL.Query().Get("transaction_type")
+	amountStr := r.URL.Query().Get("amount")
+
+	if transactionType == "" || amountStr == "" {
+		httpError(w, http.StatusBadRequest, "transaction_type and amount are required")
+		return
+	}
+
+	if transactionType != "transfer" && transactionType != "withdraw" {
+		httpError(w, http.StatusBadRequest, "transaction_type must be 'transfer' or 'withdraw'")
+		return
+	}
+
+	amount, err := strconv.ParseInt(amountStr, 10, 64)
+	if err != nil || amount <= 0 {
+		httpError(w, http.StatusBadRequest, "invalid amount")
+		return
+	}
+
+	feeCalc, err := a.service.CalculateFee(ctx, transactionType, amount)
+	if err != nil {
+		a.logger.Error("failed to calculate fee", "err", err)
+		httpError(w, http.StatusInternalServerError, "failed to calculate fee")
+		return
+	}
+
+	jsonResponse(w, http.StatusOK, feeCalc)
 }
