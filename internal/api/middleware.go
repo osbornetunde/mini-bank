@@ -126,11 +126,7 @@ func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 }
 
 func (a *API) TimeoutMiddleware(next http.Handler, timeout time.Duration) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), timeout)
-		defer cancel()
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	return http.TimeoutHandler(next, timeout, `{"error":"request timeout"}`) 
 }
 
 func (a *API) AuthMiddleware(next http.Handler) http.Handler {
