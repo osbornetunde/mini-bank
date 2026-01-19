@@ -131,13 +131,28 @@ func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 func (a *API) RequestIDMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
+		if !isValidRequestID(requestID) {
 			requestID = uuid.New().String()
 		}
 		w.Header().Set("X-Request-ID", requestID)
 		ctx := context.WithValue(r.Context(), contextKeyRequestID, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// isValidRequestID checks if the request ID is present and contains only safe characters.
+// This prevents log injection and DoS via overly long values.
+func isValidRequestID(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *API) TimeoutMiddleware(next http.Handler, timeout time.Duration) http.Handler {
