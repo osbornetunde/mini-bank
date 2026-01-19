@@ -8,3 +8,4 @@
 # But keep example files
 !.env.example
 !.env.docker.example
+tmp

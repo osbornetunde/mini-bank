@@ -5,10 +5,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
-
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/lib/pq"
@@ -84,7 +83,7 @@ func (r *Repo) ListAccounts(ctx context.Context) ([]*core.Account, error) {
 	}
 	defer rows.Close()
 
-	var res []*core.Account
+	res := make([]*core.Account, 0)
 	for rows.Next() {
 		a, err := scanAccount(rows)
 		if err != nil {
@@ -193,7 +192,7 @@ func (r *Repo) ListTransactions(ctx context.Context, accountID int) ([]*core.Tra
 	}
 	defer rows.Close()
 
-	var res []*core.Transaction
+	res := make([]*core.Transaction, 0)
 	for rows.Next() {
 		var t core.Transaction
 		var from sql.NullInt64
@@ -281,7 +280,7 @@ func (r *Repo) ListTransactionsPaginated(ctx context.Context, accountID int, fil
 	}
 	defer rows.Close()
 
-	var transactions []*core.Transaction
+	transactions := make([]*core.Transaction, 0)
 	for rows.Next() {
 		var t core.Transaction
 		var from sql.NullInt64
@@ -506,7 +505,7 @@ func (r *Repo) GetUsers(ctx context.Context, pagination storage.PaginationParams
 	defer rows.Close()
 
 	userMap := make(map[int]*core.User)
-	var users []*core.User
+	users := make([]*core.User, 0)
 	var totalCount int64
 
 	for rows.Next() {

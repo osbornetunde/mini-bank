@@ -7,20 +7,18 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"mini-bank/internal/core"
+	"mini-bank/internal/service"
+	"mini-bank/internal/storage"
+	"mini-bank/pkg/metrics"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
-	"mini-bank/internal/core"
-	"mini-bank/internal/service"
-	"mini-bank/internal/storage"
-
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
-
-	"mini-bank/pkg/metrics"
 )
 
 const (
@@ -348,7 +346,7 @@ func (a *API) GetAccountsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var accountsResponse []*getAccountResponse
+	accountsResponse := make([]*getAccountResponse, 0)
 	for _, acc := range accounts {
 		accountsResponse = append(accountsResponse, toAccountResponse(acc))
 	}
@@ -940,7 +938,6 @@ func (a *API) RefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		return []byte(a.jwtSecret), nil
 	})
-
 	if err != nil {
 		a.logger.Warn("failed to parse JWT for refresh", "err", err)
 		httpError(w, http.StatusUnauthorized, "invalid token")

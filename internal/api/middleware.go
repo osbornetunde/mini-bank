@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
+	"mini-bank/internal/service"
+	"mini-bank/pkg/metrics"
 	"net"
 	"net/http"
 	"slices"
@@ -11,10 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"mini-bank/internal/service"
-	"mini-bank/pkg/metrics"
-
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // responseRecorder wraps http.ResponseWriter to capture the status code.
@@ -39,6 +39,7 @@ type contextKey string
 const (
 	contextKeyUserID      contextKey = "user_id"
 	contextKeyPermissions contextKey = "permissions"
+	contextKeyRequestID   contextKey = "request_id"
 )
 
 // getRealIP extracts the real client IP address from the request.
@@ -99,6 +100,7 @@ func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 
 		ip := getRealIP(r, a.trustProxy)
 		ua := r.UserAgent()
+		requestID, _ := r.Context().Value(contextKeyRequestID).(string)
 
 		ctx := context.WithValue(r.Context(), service.ContextKeyIP, ip)
 		ctx = context.WithValue(ctx, service.ContextKeyUserAgent, ua)
@@ -115,6 +117,7 @@ func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 		metrics.HttpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(duration.Seconds())
 
 		a.logger.Info("processed request",
+			"request_id", requestID,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"duration", duration,
@@ -125,8 +128,20 @@ func (a *API) LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+func (a *API) RequestIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestID := r.Header.Get("X-Request-ID")
+		if requestID == "" {
+			requestID = uuid.New().String()
+		}
+		w.Header().Set("X-Request-ID", requestID)
+		ctx := context.WithValue(r.Context(), contextKeyRequestID, requestID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func (a *API) TimeoutMiddleware(next http.Handler, timeout time.Duration) http.Handler {
-	return http.TimeoutHandler(next, timeout, `{"error":"request timeout"}`) 
+	return http.TimeoutHandler(next, timeout, `{"error":"request timeout"}`)
 }
 
 func (a *API) AuthMiddleware(next http.Handler) http.Handler {

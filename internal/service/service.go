@@ -8,11 +8,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
-
 	"mini-bank/internal/core"
 	"mini-bank/internal/storage"
 	"mini-bank/pkg/metrics"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
@@ -118,7 +117,7 @@ func (s *service) ListUserAccounts(ctx context.Context, userID int) ([]*core.Acc
 	if err != nil {
 		return nil, err
 	}
-	var filtered []*core.Account
+	filtered := make([]*core.Account, 0)
 	for _, acc := range all {
 		if acc.UserID == userID {
 			filtered = append(filtered, acc)

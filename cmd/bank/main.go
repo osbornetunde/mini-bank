@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"mini-bank/internal/api"
+	"mini-bank/internal/mailer"
+	"mini-bank/internal/service"
+	"mini-bank/internal/worker"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,32 +15,28 @@ import (
 	"syscall"
 	"time"
 
-	"mini-bank/internal/api"
-	"mini-bank/internal/mailer"
-	"mini-bank/internal/service"
-	pg "mini-bank/internal/storage/postgres"
-	"mini-bank/internal/worker"
-
 	"github.com/hibiken/asynq"
 	"github.com/joho/godotenv"
 	"github.com/redis/go-redis/v9"
+
+	pg "mini-bank/internal/storage/postgres"
 )
 
 // config holds the application configuration.
 type config struct {
-	Port            string
-	DB_DSN          string
-	JWT_KEY         string
-	REDIS_ADDR      string
-	LogTokens       bool // If true, logs full reset tokens (development only)
-	SMTP_HOST       string
-	SMTP_PORT       int
-	SMTP_USER       string
-	SMTP_PASS       string
-	SMTP_SENDER     string
-	METRICS_USER    string
-	METRICS_PASS    string
-	TRUST_PROXY     bool // If true, trust X-Forwarded-For headers (for proxies/load balancers)
+	Port         string
+	DB_DSN       string
+	JWT_KEY      string
+	REDIS_ADDR   string
+	LogTokens    bool // If true, logs full reset tokens (development only)
+	SMTP_HOST    string
+	SMTP_PORT    int
+	SMTP_USER    string
+	SMTP_PASS    string
+	SMTP_SENDER  string
+	METRICS_USER string
+	METRICS_PASS string
+	TRUST_PROXY  bool // If true, trust X-Forwarded-For headers (for proxies/load balancers)
 }
 
 func main() {
@@ -121,6 +121,7 @@ func main() {
 	handler = api.SecurityHeadersMiddleware(handler)
 	handler = a.TimeoutMiddleware(handler, 15*time.Second)
 	handler = a.LoggingMiddleware(handler)
+	handler = a.RequestIDMiddleware(handler)
 
 	// graceful shutdown on SIGINT/SIGTERM
 	quit := make(chan os.Signal, 1)
